@@ -162,7 +162,8 @@ export default function HomePage() {
     authMessage,
     syncError,
     showImportPrompt,
-    signInWithMagicLink,
+    signInWithPassword,
+    signUpWithPassword,
     signOut,
     importLocalToCloud,
     startFreshCloud,
@@ -179,6 +180,7 @@ export default function HomePage() {
   const [bankTrendRange, setBankTrendRange] = useState<BankTrendRange>("6m");
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
 
   useEffect(() => {
     const interval = window.setInterval(() => setCurrentTime(Date.now()), 60_000);
@@ -298,7 +300,7 @@ export default function HomePage() {
                 <h2>Sign in for sync across devices</h2>
               </div>
             </div>
-            <p className="subtle">Use a magic link email login to keep your dashboard private and synced between devices.</p>
+            <p className="subtle">Use your email and password to keep your dashboard private and synced between devices. You stay signed in until you sign out.</p>
           </section>
         ) : null}
 
@@ -1021,7 +1023,7 @@ export default function HomePage() {
             <div className="section-head">
               <div>
                 <p className="eyebrow">Private Sync</p>
-                <h2>Sign in with magic link</h2>
+                <h2>Sign in for sync</h2>
               </div>
             </div>
             <div className="form-grid">
@@ -1035,22 +1037,48 @@ export default function HomePage() {
                   placeholder="you@example.com"
                 />
               </label>
+              <label className="full-span">
+                <span>Password</span>
+                <input
+                  type="password"
+                  value={authPassword}
+                  onChange={(event) => setAuthPassword(event.target.value)}
+                  placeholder="Your password"
+                />
+              </label>
             </div>
+            <p className="subtle">You stay signed in on this device until you sign out.</p>
             {syncError ? <div className="form-errors"><p>{syncError}</p></div> : null}
             <div className="modal-actions">
               <button className="secondary-button" onClick={() => setShowAuthModal(false)} type="button">
                 Cancel
               </button>
               <button
-                className="primary-button"
+                className="secondary-button"
                 onClick={async () => {
-                  await signInWithMagicLink(authEmail);
-                  setShowAuthModal(false);
+                  const success = await signUpWithPassword(authEmail, authPassword);
+                  if (success) {
+                    setAuthPassword("");
+                  }
                 }}
                 type="button"
-                disabled={!authEmail.trim()}
+                disabled={!authEmail.trim() || !authPassword.trim()}
               >
-                Send magic link
+                Create account
+              </button>
+              <button
+                className="primary-button"
+                onClick={async () => {
+                  const success = await signInWithPassword(authEmail, authPassword);
+                  if (success) {
+                    setAuthPassword("");
+                    setShowAuthModal(false);
+                  }
+                }}
+                type="button"
+                disabled={!authEmail.trim() || !authPassword.trim()}
+              >
+                Sign in
               </button>
             </div>
           </div>

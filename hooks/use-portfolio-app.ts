@@ -279,27 +279,48 @@ export function usePortfolioApp() {
 
   const clearDemoMessage = () => setDemoMessage(null);
 
-  const signInWithMagicLink = async (email: string) => {
+  const signInWithPassword = async (email: string, password: string) => {
     if (!client) {
-      return;
+      return false;
     }
 
     setAuthMessage(null);
     setSyncError(null);
 
-    const { error } = await client.auth.signInWithOtp({
+    const { error } = await client.auth.signInWithPassword({
       email,
-      options: {
-        emailRedirectTo: window.location.origin,
-      },
+      password,
     });
 
     if (error) {
       setSyncError(error.message);
-      return;
+      return false;
     }
 
-    setAuthMessage("Magic link sent. Open it from your email on any device to sign in.");
+    setAuthMessage("Signed in. You will stay signed in on this device until you sign out.");
+    return true;
+  };
+
+  const signUpWithPassword = async (email: string, password: string) => {
+    if (!client) {
+      return false;
+    }
+
+    setAuthMessage(null);
+    setSyncError(null);
+
+    const { error } = await client.auth.signUp({
+      email,
+      password,
+    });
+
+    if (error) {
+      setSyncError(error.message);
+      return false;
+    }
+
+    setAuthMessage("Account created. If email confirmation is enabled in Supabase, confirm once and then sign in with your password.");
+    return true;
   };
 
   const signOut = async () => {
@@ -445,7 +466,8 @@ export function usePortfolioApp() {
     authMessage,
     syncError,
     showImportPrompt,
-    signInWithMagicLink,
+    signInWithPassword,
+    signUpWithPassword,
     signOut,
     importLocalToCloud,
     startFreshCloud,

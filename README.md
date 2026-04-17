@@ -6,8 +6,9 @@ This app helps you track your total money in AUD.
 
 1. Create a Supabase project.
 2. In Supabase SQL Editor, run [`supabase/schema.sql`](/Users/timworthington/Documents/Codex financial app v1/supabase/schema.sql).
-3. In Supabase Auth, enable email magic links.
-4. Put these in `.env.local`:
+3. In Supabase Auth, enable the `Email` provider for email + password sign-in.
+4. If you want the easiest sign-up flow, turn off `Confirm email` in Supabase. If you leave it on, new users confirm once by email and then keep signing in with their password.
+5. Put these in `.env.local`:
    `NEXT_PUBLIC_SUPABASE_URL=...`
    `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=...`
 
@@ -39,7 +40,7 @@ After that, you can usually double-click it normally.
 7. Click `Refresh` to pull current ETF and crypto prices.
 8. Manual values recalculate instantly as you edit them. You only need `Refresh` for new market prices.
 9. The main dashboard number shows your liquid money only: cash, ETFs, and crypto.
-10. Sign in with a magic link if you want private syncing across devices.
+10. Sign in with your email and password if you want private syncing across devices.
 11. Your holdings, cashflow entries, bank history, and refresh history are saved to your signed-in Supabase account. If you stay signed out, the app still works locally in your browser.
 
 ## Optional: better ETF reliability with your own free API key
@@ -63,4 +64,5 @@ If you want an extra live ETF source:
 
 1. Import this project into Vercel.
 2. Add the same `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` environment variables in Vercel.
-3. Deploy.
+3. In Supabase Auth URL settings, use your Vercel site URL for production email links like password reset if you enable them later. Sign-in itself no longer depends on localhost redirects.
+4. Deploy.
