@@ -1,0 +1,31 @@
+{
+  "name": "personal-finance-dashboard-aud",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "start:local": "node scripts/start-local.mjs",
+    "verify:e2e": "playwright test",
+    "verify:pricing": "node scripts/verify-live-pricing.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.103.3",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.554.0",
+    "next": "^16.2.4",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.59.1",
+    "@types/node": "^24.9.2",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "eslint": "^9.39.1",
+    "eslint-config-next": "^16.2.4",
+    "typescript": "^5.9.3"
+  }
+}
