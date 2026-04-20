@@ -1,5 +1,16 @@
 import { STORAGE_KEY } from "@/lib/constants";
-import type { PortfolioAppState } from "@/lib/types";
+import type { BankHistoryEntry, PortfolioAppState } from "@/lib/types";
+
+function normalizeBankHistoryEntry(entry: BankHistoryEntry): BankHistoryEntry {
+  const accountName = typeof entry.accountName === "string" && entry.accountName.trim() ? entry.accountName.trim() : "Bank account";
+  const accountId = typeof entry.accountId === "string" ? entry.accountId.trim() : "";
+
+  return {
+    ...entry,
+    accountName,
+    accountId,
+  };
+}
 
 export function normalizePortfolioState(state: PortfolioAppState): PortfolioAppState {
   return {
@@ -7,9 +18,11 @@ export function normalizePortfolioState(state: PortfolioAppState): PortfolioAppS
     prices: state.prices ?? {},
     snapshots: Array.isArray(state.snapshots) ? state.snapshots : [],
     lastRefreshedAt: state.lastRefreshedAt ?? null,
+    lastViewedAt: state.lastViewedAt ?? null,
+    previousViewedAt: state.previousViewedAt ?? null,
     incomes: Array.isArray(state.incomes) ? state.incomes : [],
     expenses: Array.isArray(state.expenses) ? state.expenses : [],
-    bankHistory: Array.isArray(state.bankHistory) ? state.bankHistory : [],
+    bankHistory: Array.isArray(state.bankHistory) ? state.bankHistory.map((entry) => normalizeBankHistoryEntry(entry as BankHistoryEntry)) : [],
     scenarios: Array.isArray(state.scenarios) ? state.scenarios : [],
   };
 }

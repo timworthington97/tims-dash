@@ -37,11 +37,22 @@ After that, you can usually double-click it normally.
 4. Use the tabs to switch between Dashboard, Holdings, Income & Expenses, Projections, and History.
 5. On the dashboard, switch the forward view between `Liquid View` and `Bank Cash View`.
 6. In History, add old month-end bank balances if you want a bank balance trend.
+7. In History, you can also use `Import Ubank CSV` to upload a Ubank CSV statement, review the detected ending balance, and save it into bank history.
 7. Click `Refresh` to pull current ETF and crypto prices.
 8. Manual values recalculate instantly as you edit them. You only need `Refresh` for new market prices.
 9. The main dashboard number shows your liquid money only: cash, ETFs, and crypto.
 10. Sign in with your email and password if you want private syncing across devices.
 11. Your holdings, cashflow entries, bank history, and refresh history are saved to your signed-in Supabase account. If you stay signed out, the app still works locally in your browser.
+
+## Ubank statement import
+
+- The importer supports Ubank CSV and PDF statements.
+- You can now select multiple Ubank CSV statements at once in the `History` tab.
+- PDF is especially useful when a Ubank CSV is missing the statement balance details.
+- The importer reviews them together and automatically skips duplicates before import.
+- The importer now supports multiple Ubank account CSV formats, including separate account balances in the same month.
+- Bank history is account-aware, so same-month balances from different bank accounts are stored separately and aggregated correctly in totals and trends.
+- The easiest workflow is: export CSV statements from Ubank, go to the `History` tab, then upload them with `Import Ubank CSV`.
 
 ## Optional: better ETF reliability with your own free API key
 

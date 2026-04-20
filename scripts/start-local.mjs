@@ -2,6 +2,7 @@ import { copyFileSync, existsSync, readFileSync, unlinkSync, writeFileSync } fro
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import http from "node:http";
 import net from "node:net";
 
@@ -11,6 +12,7 @@ const envExample = join(root, ".env.example");
 const nextBinary = join(root, "node_modules", ".bin", "next");
 const npmBinary = "/opt/homebrew/bin/npm";
 const pidFile = join(root, ".lattice-wealth.pid");
+const fallbackPorts = ["3000", "3001", "3002"];
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -99,6 +101,62 @@ function removePidFile() {
   }
 }
 
+function getListeningPid(port) {
+  try {
+    const output = execFileSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    const pid = Number.parseInt(output.split(/\s+/)[0] ?? "", 10);
+    return Number.isFinite(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+function getProcessCommand(pid) {
+  try {
+    return execFileSync("ps", ["-p", String(pid), "-o", "command="], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return "";
+  }
+}
+
+function isSafeToStopProcess(pid) {
+  const command = getProcessCommand(pid).toLowerCase();
+  if (!command) {
+    return false;
+  }
+
+  return (
+    command.includes(root.toLowerCase()) ||
+    ((command.includes("next") || command.includes("node")) && command.includes("tim") && command.includes("dash"))
+  );
+}
+
+async function stopProcess(pid, reason) {
+  console.log(`${reason} (${pid})...`);
+  process.kill(pid, "SIGTERM");
+
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (!isProcessRunning(pid)) {
+      return true;
+    }
+    await wait(250);
+  }
+
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    return false;
+  }
+
+  return !isProcessRunning(pid);
+}
+
 async function stopExistingServer() {
   if (!existsSync(pidFile)) {
     return;
@@ -115,19 +173,35 @@ async function stopExistingServer() {
     return;
   }
 
-  console.log(`Stopping previous Tim's Dash session (${storedPid})...`);
-  process.kill(storedPid, "SIGTERM");
+  await stopProcess(storedPid, "Stopping previous Tim's Dash session");
+  removePidFile();
+}
 
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    if (!isProcessRunning(storedPid)) {
-      removePidFile();
-      return;
-    }
-    await wait(250);
+async function choosePort(preferredPort) {
+  const preferredPid = getListeningPid(preferredPort);
+  if (!preferredPid) {
+    return preferredPort;
   }
 
-  process.kill(storedPid, "SIGKILL");
-  removePidFile();
+  if (isSafeToStopProcess(preferredPid)) {
+    const stopped = await stopProcess(preferredPid, `Stopping old local Node/Next server on port ${preferredPort}`);
+    if (stopped && !(await checkPort("127.0.0.1", preferredPort))) {
+      return preferredPort;
+    }
+  }
+
+  for (const candidate of fallbackPorts) {
+    if (candidate === preferredPort) {
+      continue;
+    }
+
+    if (!(await checkPort("127.0.0.1", candidate))) {
+      console.log(`Port ${preferredPort} is busy, so Tim's Dash will use port ${candidate} instead.`);
+      return candidate;
+    }
+  }
+
+  throw new Error(`Ports ${fallbackPorts.join(", ")} are already busy. Please close one of those apps and try again.`);
 }
 
 if (!existsSync(envLocal) && existsSync(envExample)) {
@@ -139,17 +213,11 @@ if (!existsSync(nextBinary)) {
   process.exit(1);
 }
 
-const port = process.env.PORT ?? "3000";
-const url = `http://127.0.0.1:${port}`;
+const preferredPort = process.env.PORT ?? "3000";
 
 await stopExistingServer();
-
-if (await checkPort("127.0.0.1", port)) {
-  console.error("");
-  console.error(`Port ${port} is already in use by another app.`);
-  console.error("Please close that app first, then run Tim's Dash again.");
-  process.exit(1);
-}
+const port = await choosePort(preferredPort);
+const url = `http://127.0.0.1:${port}`;
 
 console.log("");
 console.log("Starting Tim's Dash...");
@@ -166,7 +234,10 @@ console.log("");
 
 const devServer = spawn(nextBinary, ["start", "--hostname", "127.0.0.1", "--port", port], {
   cwd: root,
-  env: process.env,
+  env: {
+    ...process.env,
+    PORT: port,
+  },
   stdio: "inherit",
 });
 
@@ -201,7 +272,7 @@ console.log("");
 await new Promise((resolve, reject) => {
   devServer.on("exit", (code) => {
     removePidFile();
-    if (code === 0 || code === null) {
+    if (code === 0 || code === null || code === 130) {
       resolve(undefined);
       return;
     }

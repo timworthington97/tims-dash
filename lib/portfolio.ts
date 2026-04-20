@@ -66,6 +66,14 @@ function monthValue(date: Date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
+function normalizeBankAccountName(value: string | undefined) {
+  return value?.trim() || "Bank account";
+}
+
+function normalizeBankAccountId(value: string | undefined) {
+  return value?.trim() || "";
+}
+
 export function validateHoldingDraft(draft: HoldingDraft) {
   const errors: string[] = [];
 
@@ -597,11 +605,15 @@ export function validateBankHistoryDraft(draft: BankHistoryDraft) {
 
 export function buildBankHistoryEntryFromDraft(draft: BankHistoryDraft): BankHistoryEntry {
   const timestamp = nowIso();
+  const accountName = normalizeBankAccountName(draft.accountName);
+  const accountId = normalizeBankAccountId(draft.accountId);
   return {
     id: draft.id ?? randomId("bank-history"),
-    name: monthLabelFromValue(draft.month),
+    name: `${monthLabelFromValue(draft.month)}${accountName ? ` • ${accountName}` : ""}`,
     month: draft.month,
     endingBalanceAud: parseNumber(draft.endingBalanceAud),
+    accountName,
+    accountId,
     notes: draft.notes.trim(),
     createdAt: draft.createdAt ?? timestamp,
     updatedAt: timestamp,
@@ -614,6 +626,8 @@ export function makeBankHistoryDraftFromExisting(entry: BankHistoryEntry): BankH
     createdAt: entry.createdAt,
     month: entry.month,
     endingBalanceAud: String(entry.endingBalanceAud),
+    accountName: normalizeBankAccountName(entry.accountName),
+    accountId: normalizeBankAccountId(entry.accountId),
     notes: entry.notes ?? "",
   };
 }
@@ -721,13 +735,54 @@ export function buildProjection(balance: number, incomes: IncomeEntry[], expense
 }
 
 function sortBankHistory(entries: BankHistoryEntry[]) {
-  return [...entries].sort((left, right) => left.month.localeCompare(right.month));
+  return [...entries].sort((left, right) => {
+    const monthComparison = left.month.localeCompare(right.month);
+    if (monthComparison !== 0) {
+      return monthComparison;
+    }
+
+    const accountComparison = normalizeBankAccountName(left.accountName).localeCompare(normalizeBankAccountName(right.accountName));
+    if (accountComparison !== 0) {
+      return accountComparison;
+    }
+
+    return normalizeBankAccountId(left.accountId).localeCompare(normalizeBankAccountId(right.accountId));
+  });
+}
+
+export function aggregateBankHistoryByMonth(entries: BankHistoryEntry[]) {
+  const grouped = new Map<
+    string,
+    {
+      month: string;
+      totalAud: number;
+      accounts: BankHistoryEntry[];
+    }
+  >();
+
+  sortBankHistory(entries).forEach((entry) => {
+    const current = grouped.get(entry.month) ?? {
+      month: entry.month,
+      totalAud: 0,
+      accounts: [],
+    };
+
+    current.totalAud += entry.endingBalanceAud;
+    current.accounts.push({
+      ...entry,
+      accountName: normalizeBankAccountName(entry.accountName),
+      accountId: normalizeBankAccountId(entry.accountId),
+    });
+    grouped.set(entry.month, current);
+  });
+
+  return [...grouped.values()];
 }
 
 export function buildBankTrend(entries: BankHistoryEntry[], currentBalance: number, range: BankTrendRange): BankTrendSummary {
-  const sorted = sortBankHistory(entries).map((entry) => ({
+  const sorted = aggregateBankHistoryByMonth(entries).map((entry) => ({
     label: monthLabelFromValue(entry.month),
-    value: entry.endingBalanceAud,
+    value: entry.totalAud,
     dateLabel: entry.month,
   }));
   const currentMonth = monthValue(new Date());

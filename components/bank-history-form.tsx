@@ -47,6 +47,14 @@ export function BankHistoryForm({
 
         <div className="form-grid">
           <label>
+            <span>Account name</span>
+            <input value={draft.accountName} onChange={(event) => update({ accountName: event.target.value })} placeholder="UBank Everyday" />
+          </label>
+          <label>
+            <span>Account identifier</span>
+            <input value={draft.accountId} onChange={(event) => update({ accountId: event.target.value })} placeholder="Optional account number" />
+          </label>
+          <label>
             <span>Month</span>
             <input type="month" value={draft.month} onChange={(event) => update({ month: event.target.value })} />
           </label>

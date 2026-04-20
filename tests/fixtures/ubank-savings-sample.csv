@@ -1,0 +1,8 @@
+Account Name,Ubank Save Account
+Account Identifier,9901
+Statement Start,2026-01-01
+Statement End,2026-01-31
+Closing Balance,$10500.50
+
+Date,Description,Debit,Credit,Balance
+31/01/2026,,,,$10500.50

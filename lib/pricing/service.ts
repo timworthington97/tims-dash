@@ -1,10 +1,14 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { GLOBAL_REFRESH_TIMEOUT_MS, ITEM_TIMEOUT_MS, fetchWithTimeout, wait, withRetry } from "@/lib/pricing/utils";
 import type { PriceRequestItem, PriceRequestResult, RefreshSummary } from "@/lib/types";
 
 const pricingMode = process.env.PRICING_MODE ?? "auto";
+const asxEtfSourceMode = process.env.ASX_ETF_SOURCE_MODE ?? "auto";
 const twelveApiKey = process.env.TWELVE_DATA_API_KEY;
 const fxCache = new Map<string, number>();
 const supportedAsxEtfs = new Set(["ETHI", "HACK", "ASIA"]);
+const execFileAsync = promisify(execFile);
 const sharedFetchHeaders = {
   "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
   Accept: "application/json,text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -21,6 +25,166 @@ const coingeckoSymbolMap: Record<string, string> = {
   usdc: "usd-coin",
   bnb: "binancecoin",
 };
+
+function getSydneyTimeParts(date: Date) {
+  const formatter = new Intl.DateTimeFormat("en-AU", {
+    timeZone: "Australia/Sydney",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  });
+
+  const parts = formatter.formatToParts(date);
+  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? "";
+
+  return {
+    year: Number(get("year")),
+    month: Number(get("month")),
+    day: Number(get("day")),
+    weekday: get("weekday"),
+    hour: Number(get("hour")),
+    minute: Number(get("minute")),
+  };
+}
+
+function toDateKey(parts: { year: number; month: number; day: number }) {
+  return `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+}
+
+function previousSydneyBusinessDay(date: Date) {
+  const cursor = new Date(date);
+
+  do {
+    cursor.setUTCDate(cursor.getUTCDate() - 1);
+    const parts = getSydneyTimeParts(cursor);
+    if (parts.weekday !== "Sat" && parts.weekday !== "Sun") {
+      return toDateKey(parts);
+    }
+  } while (true);
+}
+
+function isAsxMarketOpen(now: Date) {
+  const parts = getSydneyTimeParts(now);
+  if (parts.weekday === "Sat" || parts.weekday === "Sun") {
+    return false;
+  }
+
+  const minutes = parts.hour * 60 + parts.minute;
+  return minutes >= 10 * 60 && minutes < 16 * 60 + 15;
+}
+
+function normalizeTimezoneLabel(label: string) {
+  return label.replace(" AEST", " +1000").replace(" AEDT", " +1100");
+}
+
+function parseProviderTimestamp(label: string) {
+  const parsed = new Date(normalizeTimezoneLabel(label));
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatSydneyTimestamp(date: Date) {
+  return new Intl.DateTimeFormat("en-AU", {
+    timeZone: "Australia/Sydney",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZoneName: "short",
+  }).format(date);
+}
+
+function isStaleDelayedAsxQuote(updatedLabel: string, now = new Date()) {
+  const updatedAt = parseProviderTimestamp(updatedLabel);
+  if (!updatedAt) {
+    return {
+      stale: true,
+      providerUpdatedAt: null as string | null,
+      reason: "Provider did not return a usable quote timestamp.",
+    };
+  }
+
+  const providerDateKey = toDateKey(getSydneyTimeParts(updatedAt));
+  const currentDateKey = toDateKey(getSydneyTimeParts(now));
+
+  if (isAsxMarketOpen(now)) {
+    if (providerDateKey !== currentDateKey) {
+      return {
+        stale: true,
+        providerUpdatedAt: updatedAt.toISOString(),
+        reason: `Provider still shows ${updatedLabel} while the ASX cash market is open.`,
+      };
+    }
+
+    return {
+      stale: false,
+      providerUpdatedAt: updatedAt.toISOString(),
+      reason: updatedLabel,
+    };
+  }
+
+  const previousBusinessKey = previousSydneyBusinessDay(now);
+  if (providerDateKey !== currentDateKey && providerDateKey !== previousBusinessKey) {
+    return {
+      stale: true,
+      providerUpdatedAt: updatedAt.toISOString(),
+      reason: `Provider still shows ${updatedLabel}, which is older than the latest expected ASX trading session.`,
+    };
+  }
+
+  return {
+    stale: false,
+    providerUpdatedAt: updatedAt.toISOString(),
+    reason: updatedLabel,
+  };
+}
+
+function assessOfficialAsxFreshness(lastTradeDate: string, now = new Date()) {
+  const parsed = new Date(lastTradeDate);
+  if (Number.isNaN(parsed.getTime())) {
+    return {
+      stale: true,
+      providerUpdatedAt: null as string | null,
+      reason: "Official ASX provider did not return a usable trade timestamp.",
+      detailText: "Official ASX provider did not return a usable trade timestamp.",
+    };
+  }
+
+  const providerDateKey = toDateKey(getSydneyTimeParts(parsed));
+  const currentDateKey = toDateKey(getSydneyTimeParts(now));
+  const label = formatSydneyTimestamp(parsed);
+
+  if (isAsxMarketOpen(now) && providerDateKey !== currentDateKey) {
+    return {
+      stale: true,
+      providerUpdatedAt: parsed.toISOString(),
+      reason: `Official ASX quote last updated ${label} while the ASX cash market is open.`,
+      detailText: `Official ASX quote last updated ${label}.`,
+    };
+  }
+
+  const previousBusinessKey = previousSydneyBusinessDay(now);
+  if (!isAsxMarketOpen(now) && providerDateKey !== currentDateKey && providerDateKey !== previousBusinessKey) {
+    return {
+      stale: true,
+      providerUpdatedAt: parsed.toISOString(),
+      reason: `Official ASX quote last updated ${label}, which is older than the latest expected ASX trading session.`,
+      detailText: `Official ASX quote last updated ${label}.`,
+    };
+  }
+
+  return {
+    stale: false,
+    providerUpdatedAt: parsed.toISOString(),
+    reason: label,
+    detailText: `Official ASX quote last updated ${label}.`,
+  };
+}
 
 function mockPrice(symbol: string) {
   return Array.from(symbol.toUpperCase()).reduce((sum, char) => sum + char.charCodeAt(0), 0) * 0.91;
@@ -85,6 +249,73 @@ async function fetchTwelveDataEtf(symbol: string) {
   };
 }
 
+async function fetchJsonWithCurlFallback<T>(url: string, errorLabel: string) {
+  try {
+    const response = await fetchWithTimeout(
+      url,
+      { cache: "no-store", headers: sharedFetchHeaders },
+      ITEM_TIMEOUT_MS,
+    );
+
+    if (!response.ok) {
+      throw new Error(`${errorLabel} failed with ${response.status}.`);
+    }
+
+    return (await response.json()) as T;
+  } catch (error) {
+    try {
+      const { stdout } = await execFileAsync("curl", ["-s", url], {
+        timeout: ITEM_TIMEOUT_MS,
+        maxBuffer: 512 * 1024,
+      });
+      if (!stdout.trim()) {
+        throw new Error(`${errorLabel} curl fallback returned an empty response.`);
+      }
+
+      return JSON.parse(stdout) as T;
+    } catch (curlError) {
+      const originalMessage = error instanceof Error ? error.message : `${errorLabel} failed.`;
+      const curlMessage = curlError instanceof Error ? curlError.message : "curl fallback failed.";
+      throw new Error(`${originalMessage} ${curlMessage}`.trim());
+    }
+  }
+}
+
+async function fetchOfficialAsxEtfQuote(symbol: string) {
+  const cleaned = symbol.replace(/\.AX$/i, "").trim().toUpperCase();
+  const [headerPayload, tradePayload] = await Promise.all([
+    fetchJsonWithCurlFallback<{
+      data?: {
+        priceLast?: number;
+        symbol?: string;
+      };
+    }>(`https://asx.api.markitdigital.com/asx-research/1.0/etfs/${encodeURIComponent(cleaned)}/header`, `Official ASX ETF header for ${cleaned}`),
+    fetchJsonWithCurlFallback<{
+      last_trade_date?: string;
+    }>(`https://www.asx.com.au/asx/1/beta/markit/share/${encodeURIComponent(cleaned)}`, `Official ASX ETF trade timestamp for ${cleaned}`),
+  ]);
+
+  const price = Number(headerPayload.data?.priceLast);
+  const providerSymbol = `${(headerPayload.data?.symbol ?? cleaned).toUpperCase().replace(/\.AX$/i, "")}.AX`;
+  const lastTradeDate = tradePayload.last_trade_date ?? null;
+
+  if (!Number.isFinite(price) || price <= 0) {
+    throw new Error(`Official ASX ETF header did not return a usable price for ${cleaned}.`);
+  }
+
+  if (!lastTradeDate) {
+    throw new Error(`Official ASX ETF trade metadata did not return a usable timestamp for ${cleaned}.`);
+  }
+
+  return {
+    symbol: providerSymbol,
+    currency: "AUD",
+    price,
+    source: "ASX official",
+    lastTradeDate,
+  };
+}
+
 async function fetchStockAnalysisAsxQuote(symbol: string) {
   const cleaned = symbol.replace(/\.AX$/i, "").trim().toUpperCase();
   const response = await fetchWithTimeout(
@@ -131,9 +362,8 @@ async function fetchStockAnalysisAsxQuote(symbol: string) {
     currency: "AUD",
     price: currentPrice,
     source: "StockAnalysis",
-    status: "delayed" as const,
-    statusText: "Delayed market price",
-    detailText: marketState === "closed" ? `Market closed • ${updatedLabel}` : updatedLabel,
+    marketState,
+    updatedLabel,
   };
 }
 
@@ -144,25 +374,28 @@ async function resolveEtfQuote(symbol: string, market?: string) {
   const isAsx = !marketUpper || marketUpper === "ASX" || base.endsWith(".AX");
   const errors: string[] = [];
 
-  if (isAsx && supportedAsxEtfs.has(normalized)) {
+  if (isAsx && supportedAsxEtfs.has(normalized) && asxEtfSourceMode !== "stockanalysis") {
     try {
-      const stockAnalysisQuote = await withRetry(() => fetchStockAnalysisAsxQuote(normalized), 2);
+      const officialQuote = await withRetry(() => fetchOfficialAsxEtfQuote(normalized), 2);
+      const freshness = assessOfficialAsxFreshness(officialQuote.lastTradeDate);
+
       return {
-        symbol: stockAnalysisQuote.symbol,
-        unitPriceAud: stockAnalysisQuote.price,
-        quoteCurrency: stockAnalysisQuote.currency,
-        originalUnitPrice: stockAnalysisQuote.price,
-        source: stockAnalysisQuote.source,
-        status: stockAnalysisQuote.status,
-        statusText: stockAnalysisQuote.statusText,
-        detailText: stockAnalysisQuote.detailText,
+        symbol: officialQuote.symbol,
+        unitPriceAud: officialQuote.price,
+        quoteCurrency: officialQuote.currency,
+        originalUnitPrice: officialQuote.price,
+        source: officialQuote.source,
+        status: freshness.stale ? ("stale" as const) : ("delayed" as const),
+        fetchedAt: freshness.providerUpdatedAt,
+        statusText: freshness.stale ? "Stale official ASX ETF price" : "Official ASX ETF price",
+        detailText: freshness.stale ? freshness.reason : freshness.detailText,
       };
     } catch (error) {
-      errors.push(error instanceof Error ? error.message : `ASX fallback failed for ${normalized}.AX`);
+      errors.push(error instanceof Error ? error.message : `Official ASX ETF pricing failed for ${normalized}.AX`);
     }
   }
 
-  if (twelveApiKey) {
+  if (twelveApiKey && asxEtfSourceMode !== "stockanalysis") {
     try {
       const quote = await withRetry(
         () => fetchTwelveDataEtf(isAsx ? `${normalized}.AX` : base),
@@ -174,13 +407,49 @@ async function resolveEtfQuote(symbol: string, market?: string) {
         unitPriceAud: quote.price * fxRate,
         quoteCurrency: quote.currency,
         originalUnitPrice: quote.price,
-        source: twelveApiKey ? "Twelve Data" : "Yahoo Finance",
+        source: "Twelve Data",
         status: "live" as const,
         statusText: "Live market price",
         detailText: quote.currency === "AUD" ? "Quoted in AUD" : `Converted from ${quote.currency} to AUD`,
       };
     } catch (error) {
       errors.push(error instanceof Error ? error.message : `Fallback ETF provider failed for ${base}`);
+    }
+  }
+
+  if (isAsx && supportedAsxEtfs.has(normalized) && asxEtfSourceMode !== "official") {
+    try {
+      const stockAnalysisQuote = await withRetry(() => fetchStockAnalysisAsxQuote(normalized), 2);
+      return {
+        symbol: stockAnalysisQuote.symbol,
+        unitPriceAud: stockAnalysisQuote.price,
+        quoteCurrency: stockAnalysisQuote.currency,
+        originalUnitPrice: stockAnalysisQuote.price,
+        source: stockAnalysisQuote.source,
+        ...(function () {
+          const freshness = isStaleDelayedAsxQuote(stockAnalysisQuote.updatedLabel);
+          if (freshness.stale) {
+            return {
+              status: "stale" as const,
+              fetchedAt: freshness.providerUpdatedAt,
+              statusText: "Stale delayed market price",
+              detailText: freshness.reason,
+            };
+          }
+
+          return {
+            status: "delayed" as const,
+            fetchedAt: freshness.providerUpdatedAt,
+            statusText: "Delayed market price",
+            detailText:
+              stockAnalysisQuote.marketState === "closed"
+                ? `Market closed • ${stockAnalysisQuote.updatedLabel}`
+                : stockAnalysisQuote.updatedLabel,
+          };
+        })(),
+      };
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : `ASX fallback failed for ${normalized}.AX`);
     }
   }
 
@@ -296,6 +565,7 @@ async function resolveSinglePrice(item: PriceRequestItem): Promise<PriceRequestR
       item.kind === "etf"
         ? await resolveEtfQuote(item.symbol, item.market)
         : await withRetry(() => resolveCryptoQuote(item.symbol), 2);
+    const fetchedAt = "fetchedAt" in quote ? quote.fetchedAt : null;
 
     return {
       holdingId: item.holdingId,
@@ -303,7 +573,7 @@ async function resolveSinglePrice(item: PriceRequestItem): Promise<PriceRequestR
       symbol: quote.symbol,
       unitPriceAud: quote.unitPriceAud,
       source: quote.source,
-      fetchedAt: new Date().toISOString(),
+      fetchedAt: fetchedAt ?? new Date().toISOString(),
       status: quote.status,
       quoteCurrency: quote.quoteCurrency,
       originalUnitPrice: quote.originalUnitPrice,

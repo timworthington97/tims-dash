@@ -1,0 +1,10 @@
+Account Name,Ubank Everyday
+Statement Start,2026-04-01
+Statement End,2026-04-30
+
+Date,Description,Debit,Credit,Balance
+01/04/2026,Opening Balance,,,$18538.20
+03/04/2026,Salary,,3500.00,$22038.20
+09/04/2026,Rent,2650.00,,$19388.20
+15/04/2026,Groceries,182.45,,$19205.75
+29/04/2026,Interest,,4.85,$19210.60

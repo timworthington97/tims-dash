@@ -1,10 +1,13 @@
 import { defineConfig } from "@playwright/test";
 
+const testPort = process.env.PLAYWRIGHT_PORT ?? "3100";
+const testBaseUrl = `http://127.0.0.1:${testPort}`;
+
 export default defineConfig({
   testDir: "./tests",
   timeout: 90_000,
   use: {
-    baseURL: "http://127.0.0.1:3000",
+    baseURL: testBaseUrl,
     headless: true,
     browserName: "chromium",
     launchOptions: {
@@ -12,8 +15,8 @@ export default defineConfig({
     },
   },
   webServer: {
-    command: "/opt/homebrew/bin/npm run dev -- --hostname 127.0.0.1 --port 3000",
-    url: "http://127.0.0.1:3000",
+    command: `/opt/homebrew/bin/npm run dev -- --hostname 127.0.0.1 --port ${testPort}`,
+    url: testBaseUrl,
     reuseExistingServer: true,
     timeout: 120_000,
   },

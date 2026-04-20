@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { SAMPLE_BANK_HISTORY, SAMPLE_EXPENSES, SAMPLE_HOLDINGS, SAMPLE_INCOMES, SAMPLE_SCENARIOS, SNAPSHOT_HISTORY_LIMIT } from "@/lib/constants";
 import { loadCloudPortfolioState, saveCloudPortfolioState } from "@/lib/cloud-storage";
@@ -25,6 +25,8 @@ const defaultState: PortfolioAppState = {
   prices: {},
   snapshots: [],
   lastRefreshedAt: null,
+  lastViewedAt: null,
+  previousViewedAt: null,
   incomes: [],
   expenses: [],
   bankHistory: [],
@@ -72,6 +74,10 @@ export function usePortfolioApp() {
       return;
     }
 
+    const authReadyTimeout = window.setTimeout(() => {
+      setAuthReady(true);
+    }, 1500);
+
     const syncSession = async (nextSession: Session | null) => {
       setSession(nextSession);
       setSyncError(null);
@@ -91,7 +97,12 @@ export function usePortfolioApp() {
       try {
         const remote = await loadCloudPortfolioState(client, nextSession.user.id);
         if (remote) {
-          setState(remote.state);
+          const localMeta = loadPortfolioState();
+          setState({
+            ...remote.state,
+            lastViewedAt: localMeta?.lastViewedAt ?? remote.state.lastViewedAt,
+            previousViewedAt: localMeta?.previousViewedAt ?? remote.state.previousViewedAt,
+          });
           pendingImportRef.current = remote.state;
           setShowImportPrompt(false);
           cloudReadyRef.current = true;
@@ -115,6 +126,7 @@ export function usePortfolioApp() {
       } catch (error) {
         setSyncError(error instanceof Error ? error.message : "Could not load your synced data.");
       } finally {
+        window.clearTimeout(authReadyTimeout);
         setAuthReady(true);
       }
     };
@@ -128,6 +140,7 @@ export function usePortfolioApp() {
     });
 
     return () => {
+      window.clearTimeout(authReadyTimeout);
       data.subscription.unsubscribe();
     };
   }, [client]);
@@ -268,6 +281,8 @@ export function usePortfolioApp() {
       prices: {},
       snapshots: [],
       lastRefreshedAt: null,
+      lastViewedAt: state.lastViewedAt,
+      previousViewedAt: state.previousViewedAt,
       incomes: SAMPLE_INCOMES.map((item) => ({ ...item })),
       expenses: SAMPLE_EXPENSES.map((item) => ({ ...item })),
       bankHistory: SAMPLE_BANK_HISTORY.map((item) => ({ ...item })),
@@ -278,6 +293,23 @@ export function usePortfolioApp() {
   };
 
   const clearDemoMessage = () => setDemoMessage(null);
+
+  const markDashboardViewed = useCallback(() => {
+    setState((current) => {
+      const now = Date.now();
+      const currentViewedAt = current.lastViewedAt ? new Date(current.lastViewedAt).getTime() : null;
+
+      if (currentViewedAt && Number.isFinite(currentViewedAt) && now - currentViewedAt < 5 * 60 * 1000) {
+        return current;
+      }
+
+      return {
+        ...current,
+        previousViewedAt: current.lastViewedAt ?? current.previousViewedAt,
+        lastViewedAt: new Date(now).toISOString(),
+      };
+    });
+  }, []);
 
   const signInWithPassword = async (email: string, password: string) => {
     if (!client) {
@@ -399,11 +431,26 @@ export function usePortfolioApp() {
       }
 
       const mergedPrices = deriveDisplayPrices(state.prices, payload.prices ?? []);
+      const insightPrices = { ...mergedPrices };
+      (payload.prices ?? []).forEach((price) => {
+        if (price.status !== "stale") {
+          return;
+        }
+
+        const existing = state.prices[price.holdingId];
+        if (existing) {
+          insightPrices[price.holdingId] = existing;
+          return;
+        }
+
+        delete insightPrices[price.holdingId];
+      });
       const previousView = calculatePortfolioView(state.holdings, state.prices, state.snapshots);
       const pricedView = calculatePortfolioView(state.holdings, mergedPrices, state.snapshots);
+      const insightView = calculatePortfolioView(state.holdings, insightPrices, state.snapshots);
       const snapshot = createSnapshot(pricedView.holdings, new Date().toISOString());
       setRefreshSummary(payload.summary);
-      setRefreshInsight(buildRefreshInsight(previousView, pricedView));
+      setRefreshInsight(buildRefreshInsight(previousView, insightView));
 
       setState((current) => ({
         ...current,
@@ -435,6 +482,8 @@ export function usePortfolioApp() {
     prices: state.prices,
     snapshots: state.snapshots,
     lastRefreshedAt: state.lastRefreshedAt,
+    lastViewedAt: state.lastViewedAt,
+    previousViewedAt: state.previousViewedAt,
     incomes: state.incomes,
     expenses: state.expenses,
     bankHistory: state.bankHistory,
@@ -459,6 +508,7 @@ export function usePortfolioApp() {
     refreshPortfolio,
     loadSampleData,
     clearDemoMessage,
+    markDashboardViewed,
     hasSupabase: hasSupabaseConfig(),
     isSignedIn: Boolean(session),
     authReady,

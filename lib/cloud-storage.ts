@@ -40,6 +40,8 @@ function fromCloudRow(row: CloudStateRow): PortfolioAppState {
     prices: row.prices,
     snapshots: row.snapshots,
     lastRefreshedAt: row.last_refreshed_at,
+    lastViewedAt: null,
+    previousViewedAt: null,
     incomes: row.incomes,
     expenses: row.expenses,
     bankHistory: row.bank_history,

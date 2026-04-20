@@ -13,10 +13,12 @@ import {
   Landmark,
   LayoutGrid,
   LoaderCircle,
+  Moon,
   Pencil,
   PieChart,
   Plus,
   RefreshCcw,
+  SunMedium,
   TrendingUp,
   Trash2,
   Wallet,
@@ -25,7 +27,11 @@ import { AnimatedNumber } from "@/components/animated-number";
 import { BankHistoryForm } from "@/components/bank-history-form";
 import { CashflowForm } from "@/components/cashflow-form";
 import { HoldingForm } from "@/components/holding-form";
+import { ProjectionChart } from "@/components/projection-chart";
 import { TrendChart } from "@/components/trend-chart";
+import { parseUbankPdfText } from "@/lib/importers/ubank-pdf";
+import { parseUbankCsv } from "@/lib/importers/ubank";
+import { buildDashboardInsights } from "@/lib/insights";
 import {
   DEFAULT_BANK_SAFETY_BUFFER_AUD,
   EMPTY_BANK_HISTORY_VALUES,
@@ -38,6 +44,7 @@ import {
   STALE_AFTER_MS,
 } from "@/lib/constants";
 import {
+  aggregateBankHistoryByMonth,
   buildAllocationSegments,
   buildBankTrend,
   buildHoldingGroups,
@@ -63,9 +70,13 @@ import type {
   HoldingType,
   IncomeDraft,
   PortfolioSnapshot,
+  UbankImportBatchItem,
 } from "@/lib/types";
 
 type TabId = "dashboard" | "holdings" | "cashflow" | "projections" | "history";
+type ThemeMode = "light" | "dark";
+
+const THEME_STORAGE_KEY = "tims-dash-theme";
 
 const sectionIcons = {
   cash: Banknote,
@@ -128,6 +139,23 @@ function monthNameFromValue(value: string) {
   return new Intl.DateTimeFormat("en-AU", { month: "long", year: "numeric" }).format(new Date(year, month - 1, 1));
 }
 
+function buildBankHistoryAccountDuplicateKey(accountName: string | null | undefined, accountId: string | null | undefined, month: string, endingBalanceAud: number) {
+  return `${accountName?.trim().toLowerCase() ?? ""}|${accountId?.trim().toLowerCase() ?? ""}|${month}|${endingBalanceAud.toFixed(2)}`;
+}
+
+function buildBankHistoryAccountMonthKey(accountName: string | null | undefined, accountId: string | null | undefined, month: string) {
+  return `${accountName?.trim().toLowerCase() ?? ""}|${accountId?.trim().toLowerCase() ?? ""}|${month}`;
+}
+
+function describeImportSelection(items: UbankImportBatchItem[]) {
+  const selected = items.length;
+  const ready = items.filter((item) => item.status === "ready").length;
+  const needsInput = items.filter((item) => item.status === "needs_input").length;
+  const duplicates = items.filter((item) => item.status === "duplicate").length;
+  const errors = items.filter((item) => item.status === "error").length;
+  return `${selected} file${selected === 1 ? "" : "s"} selected • ${ready} ready • ${needsInput} need balance • ${duplicates} duplicate${duplicates === 1 ? "" : "s"} skipped • ${errors} parse error${errors === 1 ? "" : "s"}`;
+}
+
 export default function HomePage() {
   const {
     holdings,
@@ -155,6 +183,8 @@ export default function HomePage() {
     demoMessage,
     refreshSummary,
     refreshInsight,
+    lastViewedAt,
+    previousViewedAt,
     hasSupabase,
     isSignedIn,
     authReady,
@@ -167,6 +197,7 @@ export default function HomePage() {
     signOut,
     importLocalToCloud,
     startFreshCloud,
+    markDashboardViewed,
   } = usePortfolioApp();
 
   const [activeTab, setActiveTab] = useState<TabId>("dashboard");
@@ -181,6 +212,182 @@ export default function HomePage() {
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
+    if (typeof document !== "undefined") {
+      const rootTheme = document.documentElement.dataset.theme;
+      if (rootTheme === "light" || rootTheme === "dark") {
+        return rootTheme;
+      }
+    }
+
+    if (typeof window !== "undefined" && window.matchMedia("(prefers-color-scheme: dark)").matches) {
+      return "dark";
+    }
+
+    return "light";
+  });
+  const [ubankImportItems, setUbankImportItems] = useState<UbankImportBatchItem[]>([]);
+  const [ubankImportError, setUbankImportError] = useState<string | null>(null);
+  const [ubankImportMessage, setUbankImportMessage] = useState<string | null>(null);
+  const [ubankDragActive, setUbankDragActive] = useState(false);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = themeMode;
+  }, [themeMode]);
+
+  const toggleTheme = () => {
+    const nextTheme: ThemeMode = themeMode === "dark" ? "light" : "dark";
+    setThemeMode(nextTheme);
+    document.documentElement.dataset.theme = nextTheme;
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
+    } catch {
+      // Ignore storage failures and keep the in-memory theme selection.
+    }
+  };
+
+  const handleUbankCsvUpload = async (files: FileList | File[] | null) => {
+    const selectedFiles = files ? Array.from(files) : [];
+    if (!selectedFiles.length) {
+      return;
+    }
+
+    setUbankImportError(null);
+    setUbankImportMessage(null);
+
+    const existingHistoryKeys = new Set(
+      bankHistory.map((entry) =>
+        buildBankHistoryAccountDuplicateKey(entry.accountName, entry.accountId, entry.month, entry.endingBalanceAud),
+      ),
+    );
+    const existingAccountMonthKeys = new Set(
+      bankHistory.map((entry) => buildBankHistoryAccountMonthKey(entry.accountName, entry.accountId, entry.month)),
+    );
+    const seenBatchSignatures = new Set<string>();
+    const seenFingerprints = new Set<string>();
+    const seenBatchAccountMonths = new Set<string>();
+
+    const nextItems = await Promise.all(
+      selectedFiles.map(async (file) => {
+        const extension = file.name.toLowerCase();
+        if (!extension.endsWith(".csv") && !extension.endsWith(".pdf")) {
+          return {
+            id: `ubank-import-${Math.random().toString(36).slice(2, 10)}`,
+            fileName: file.name,
+            status: "error" as const,
+            review: null,
+            error: "Only Ubank CSV or PDF statement files are supported in this import.",
+            duplicateReason: null,
+          };
+        }
+
+        try {
+          const review = extension.endsWith(".pdf")
+            ? await (async () => {
+                const formData = new FormData();
+                formData.append("file", file);
+                const response = await fetch("/api/parse-statement", {
+                  method: "POST",
+                  body: formData,
+                });
+                const payload = (await response.json()) as { review?: Awaited<ReturnType<typeof parseUbankPdfText>>; error?: string };
+                if (!response.ok || !payload.review) {
+                  throw new Error(payload.error ?? "We could not read that PDF statement.");
+                }
+                return payload.review;
+              })()
+            : parseUbankCsv(await file.text(), file.name);
+          const accountMonthKey = buildBankHistoryAccountMonthKey(review.accountName, review.accountId, review.detectedMonth);
+          const bankHistoryKey =
+            review.endingBalanceAud === null
+              ? null
+              : buildBankHistoryAccountDuplicateKey(review.accountName, review.accountId, review.detectedMonth, review.endingBalanceAud);
+          let status: UbankImportBatchItem["status"] = review.manualBalanceRequired ? "needs_input" : "ready";
+          let duplicateReason: string | null = null;
+
+          if ((bankHistoryKey && existingHistoryKeys.has(bankHistoryKey)) || (review.manualBalanceRequired && existingAccountMonthKeys.has(accountMonthKey))) {
+            status = "duplicate";
+            duplicateReason = review.manualBalanceRequired
+              ? "Already imported for the same account and month."
+              : "Already imported for the same account, month, and ending balance.";
+          } else if (seenFingerprints.has(review.fileFingerprint) || seenBatchSignatures.has(review.statementSignature) || (review.manualBalanceRequired && seenBatchAccountMonths.has(accountMonthKey))) {
+            status = "duplicate";
+            duplicateReason = "Duplicate of another statement in this upload batch.";
+          }
+
+          seenFingerprints.add(review.fileFingerprint);
+          seenBatchSignatures.add(review.statementSignature);
+          seenBatchAccountMonths.add(accountMonthKey);
+
+          return {
+            id: `ubank-import-${Math.random().toString(36).slice(2, 10)}`,
+            fileName: file.name,
+            status,
+            review,
+            error: null,
+            duplicateReason,
+            manualBalanceAud: review.endingBalanceAud === null ? "" : undefined,
+          };
+        } catch (error) {
+          return {
+            id: `ubank-import-${Math.random().toString(36).slice(2, 10)}`,
+            fileName: file.name,
+            status: "error" as const,
+            review: null,
+            error: error instanceof Error ? error.message : "We could not read that CSV file.",
+            duplicateReason: null,
+          };
+        }
+      }),
+    );
+
+    setUbankImportItems(nextItems);
+    setUbankImportMessage(describeImportSelection(nextItems));
+  };
+
+  const saveImportedBankHistory = () => {
+    const readyItems = ubankImportItems.filter(
+      (item) =>
+        item.review &&
+        (item.status === "ready" || (item.status === "needs_input" && Number(item.manualBalanceAud) > 0)),
+    );
+    if (!readyItems.length) {
+      setUbankImportError("There are no valid new statements ready to import yet.");
+      return;
+    }
+
+    readyItems.forEach((item) => {
+      if (!item.review) {
+        return;
+      }
+
+      const endingBalanceAud = item.review.endingBalanceAud ?? Number(item.manualBalanceAud);
+
+      saveBankHistoryEntry({
+        id: `bank-history-${Math.random().toString(36).slice(2, 10)}`,
+        name: monthNameFromValue(item.review.detectedMonth),
+        month: item.review.detectedMonth,
+        endingBalanceAud,
+        accountName: item.review.accountName ?? "Bank account",
+        accountId: item.review.accountId ?? "",
+        notes: item.review.accountName
+          ? item.review.manualBalanceRequired
+            ? `Imported from ${item.review.accountName} with manual ending balance`
+            : `Imported from ${item.review.accountName}`
+          : "Imported from Ubank CSV",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+    });
+
+    const duplicates = ubankImportItems.filter((item) => item.status === "duplicate").length;
+    const errors = ubankImportItems.filter((item) => item.status === "error").length;
+    setUbankImportMessage(
+      `${readyItems.length} imported • ${duplicates} duplicate${duplicates === 1 ? "" : "s"} skipped • ${errors} parse error${errors === 1 ? "" : "s"}`,
+    );
+    setUbankImportItems([]);
+    setUbankImportError(null);
+  };
 
   useEffect(() => {
     const interval = window.setInterval(() => setCurrentTime(Date.now()), 60_000);
@@ -195,6 +402,7 @@ export default function HomePage() {
   const bankProjection = useMemo(() => buildProjection(view.totals.cash, incomes, expenses, 12), [view.totals.cash, incomes, expenses]);
   const selectedProjection = forwardMode === "liquid" ? liquidProjection : bankProjection;
   const threeMonthProjection = selectedProjection.series.slice(0, 3);
+  const groupedBankHistory = useMemo(() => aggregateBankHistoryByMonth(bankHistory), [bankHistory]);
   const bankTrend = useMemo(() => buildBankTrend(bankHistory, view.totals.cash, bankTrendRange), [bankHistory, view.totals.cash, bankTrendRange]);
   const bankBufferWarning = useMemo(() => findBankBufferWarning(bankProjection.series, DEFAULT_BANK_SAFETY_BUFFER_AUD), [bankProjection.series]);
   const stale = lastRefreshedAt ? currentTime - new Date(lastRefreshedAt).getTime() > STALE_AFTER_MS : true;
@@ -210,6 +418,41 @@ export default function HomePage() {
         : currentTime - new Date(lastRefreshedAt).getTime() < 5 * 60 * 1000
           ? "Live"
           : "Recently updated";
+  const insights = useMemo(
+    () =>
+      buildDashboardInsights({
+        now: currentTime,
+        view,
+        snapshots,
+        bankHistory,
+        cashflow,
+        refreshInsight,
+        lastViewedAt,
+        previousViewedAt,
+        lastRefreshedAt,
+        priceStatusLabel,
+        bankBufferWarning,
+      }),
+    [
+      currentTime,
+      view,
+      snapshots,
+      bankHistory,
+      cashflow,
+      refreshInsight,
+      lastViewedAt,
+      previousViewedAt,
+      lastRefreshedAt,
+      priceStatusLabel,
+      bankBufferWarning,
+    ],
+  );
+
+  useEffect(() => {
+    if (activeTab === "dashboard") {
+      markDashboardViewed();
+    }
+  }, [activeTab, markDashboardViewed]);
 
   const allocationGradient = useMemo(() => {
     const colors: Record<string, string> = {
@@ -235,94 +478,145 @@ export default function HomePage() {
     return `conic-gradient(${stops.parts.join(", ")})`;
   }, [allocation]);
 
+  const activeTabLabel = tabs.find((tab) => tab.id === activeTab)?.label ?? "Dashboard";
+
   return (
     <main className="app-shell">
       <div className="app-backdrop" />
       <div className="app-frame">
-        <header className="topbar">
-          <div className="topbar-copy">
-            <p className="eyebrow">Personal Finance</p>
-            <h1>Tim&apos;s Dash</h1>
-            <p className="subtle">Liquid money, live ETF and crypto pricing, and a clearer forward view of your bank cash in AUD.</p>
-          </div>
-          <div className="topbar-actions">
-            {hasSupabase ? (
-              isSignedIn ? (
-                <>
-                  <span className="inline-badge">{userEmail ?? "Signed in"}</span>
-                  <button className="secondary-button" onClick={() => void signOut()} type="button">
-                    Sign out
+        <div className="app-layout">
+          <aside className="side-nav surface">
+            <div className="side-nav-top">
+              <div className="brand-mark" aria-hidden="true">
+                <span>T</span>
+              </div>
+              <div className="side-nav-copy">
+                <p className="eyebrow">Private Finance</p>
+                <h1>Tim&apos;s Dash</h1>
+              </div>
+            </div>
+
+            <nav className="tab-bar side-tab-bar" aria-label="Sections">
+              {tabs.map((tab) => {
+                const Icon = tab.icon;
+                return (
+                  <button
+                    key={tab.id}
+                    className={clsx("tab-button", activeTab === tab.id && "active")}
+                    onClick={() => setActiveTab(tab.id)}
+                    type="button"
+                  >
+                    <Icon size={18} />
+                    <span>{tab.label}</span>
                   </button>
-                </>
-              ) : (
-                <button className="secondary-button" onClick={() => setShowAuthModal(true)} type="button" disabled={!authReady}>
-                  Sign in for sync
-                </button>
-              )
-            ) : null}
-            <button className="secondary-button" onClick={() => loadSampleData(SAMPLE_HOLDINGS)} type="button">
-              Load Sample Data
-            </button>
-            <button
-              className={clsx("primary-button", refreshState === "loading" && "is-loading")}
-              onClick={() => void refreshPortfolio()}
-              type="button"
-              disabled={refreshState === "loading"}
-            >
-              {refreshState === "loading" ? <LoaderCircle className="spin" size={18} /> : <RefreshCcw size={18} />}
-              Refresh
-            </button>
-          </div>
-        </header>
+                );
+              })}
+            </nav>
 
-        <nav className="tab-bar surface" aria-label="Sections">
-          {tabs.map((tab) => {
-            const Icon = tab.icon;
-            return (
+            <div className="side-nav-bottom">
               <button
-                key={tab.id}
-                className={clsx("tab-button", activeTab === tab.id && "active")}
-                onClick={() => setActiveTab(tab.id)}
+                className="theme-toggle sidebar-theme-toggle"
+                onClick={toggleTheme}
                 type="button"
+                aria-label={`Switch to ${themeMode === "dark" ? "light" : "dark"} mode`}
               >
-                <Icon size={16} />
-                <span>{tab.label}</span>
+                <span className="theme-toggle-icon">{themeMode === "dark" ? <SunMedium size={16} /> : <Moon size={16} />}</span>
+                <span className="theme-toggle-copy">
+                  <strong>{themeMode === "dark" ? "Dark mode" : "Light mode"}</strong>
+                  <small>{themeMode === "dark" ? "Soft contrast" : "Pale canvas"}</small>
+                </span>
               </button>
-            );
-          })}
-        </nav>
 
-        {hasSupabase && !isSignedIn ? (
-          <section className="surface section-card">
-            <div className="section-head compact">
-              <div>
-                <p className="eyebrow">Private Sync</p>
-                <h2>Sign in for sync across devices</h2>
+              <div className="side-sync-card inset-surface">
+                <p className="eyebrow">Sync</p>
+                <strong>{hasSupabase ? (isSignedIn ? "Cloud connected" : "Private sync ready") : "Local only"}</strong>
+                <span className="subtle">
+                  {hasSupabase ? (isSignedIn ? userEmail ?? "Signed in" : "Sign in to sync across devices.") : "Supabase env vars are not configured."}
+                </span>
+                {hasSupabase ? (
+                  isSignedIn ? (
+                    <button className="secondary-button full-width" onClick={() => void signOut()} type="button">
+                      Sign out
+                    </button>
+                  ) : (
+                    <button className="secondary-button full-width" onClick={() => setShowAuthModal(true)} type="button" disabled={!authReady}>
+                      Sign in for sync
+                    </button>
+                  )
+                ) : null}
               </div>
             </div>
-            <p className="subtle">Use your email and password to keep your dashboard private and synced between devices. You stay signed in until you sign out.</p>
-          </section>
-        ) : null}
+          </aside>
 
-        {showImportPrompt ? (
-          <section className="surface section-card">
-            <div className="section-head compact">
-              <div>
-                <p className="eyebrow">Cloud Setup</p>
-                <h2>Bring your existing data with you?</h2>
+          <section className="workspace-shell">
+            <header className="workspace-topbar surface">
+              <div className="workspace-topbar-actions">
+                <button className="secondary-button" onClick={() => loadSampleData(SAMPLE_HOLDINGS)} type="button">
+                  Load sample data
+                </button>
+                <button
+                  className={clsx("primary-button", refreshState === "loading" && "is-loading")}
+                  onClick={() => void refreshPortfolio()}
+                  type="button"
+                  disabled={refreshState === "loading"}
+                >
+                  {refreshState === "loading" ? <LoaderCircle className="spin" size={18} /> : <RefreshCcw size={18} />}
+                  Refresh
+                </button>
               </div>
-            </div>
-            <p className="subtle">We found local data on this device. Import it into your private Supabase account, or start with a clean synced dashboard.</p>
-            <div className="section-actions">
-              <button className="secondary-button" onClick={() => void startFreshCloud()} type="button">
-                Start fresh
-              </button>
-              <button className="primary-button" onClick={() => void importLocalToCloud()} type="button">
-                Import local data
-              </button>
-            </div>
-          </section>
-        ) : null}
+            </header>
+
+            <section className="workspace-intro surface">
+              <div>
+                <p className="eyebrow">Overview</p>
+                <h2>{activeTabLabel}</h2>
+                <p className="subtle">
+                  Liquid money, live ETF and crypto pricing, and a clearer forward view of your bank cash in AUD.
+                </p>
+              </div>
+              <div className="workspace-intro-meta">
+                <div className="workspace-intro-pill inset-surface">
+                  <span>Pricing status</span>
+                  <strong>{priceStatusLabel}</strong>
+                </div>
+                <div className="workspace-intro-pill inset-surface">
+                  <span>Refresh result</span>
+                  <strong>{refreshSummary ? `${refreshSummary.updated} updated • ${refreshSummary.failed} failed` : "No refresh yet"}</strong>
+                </div>
+              </div>
+            </section>
+
+            {hasSupabase && !isSignedIn ? (
+              <section className="surface section-card">
+                <div className="section-head compact">
+                  <div>
+                    <p className="eyebrow">Private Sync</p>
+                    <h2>Sign in for sync across devices</h2>
+                  </div>
+                </div>
+                <p className="subtle">Use your email and password to keep your dashboard private and synced between devices. You stay signed in until you sign out.</p>
+              </section>
+            ) : null}
+
+            {showImportPrompt ? (
+              <section className="surface section-card">
+                <div className="section-head compact">
+                  <div>
+                    <p className="eyebrow">Cloud Setup</p>
+                    <h2>Bring your existing data with you?</h2>
+                  </div>
+                </div>
+                <p className="subtle">We found local data on this device. Import it into your private Supabase account, or start with a clean synced dashboard.</p>
+                <div className="section-actions">
+                  <button className="secondary-button" onClick={() => void startFreshCloud()} type="button">
+                    Start fresh
+                  </button>
+                  <button className="primary-button" onClick={() => void importLocalToCloud()} type="button">
+                    Import local data
+                  </button>
+                </div>
+              </section>
+            ) : null}
 
         {activeTab === "dashboard" ? (
           <section className="tab-panel dashboard-stack">
@@ -375,6 +669,61 @@ export default function HomePage() {
                 <MetricCard label="Additional asset value" value={formatAud(view.totals.manualAsset)} tone="neutral" />
                 <MetricCard label="Liabilities" value={formatAud(view.totals.debt)} tone="negative" />
                 <MetricCard label="Net worth incl. assets" value={formatAud(view.totals.netWorth)} tone="neutral" />
+              </div>
+            </section>
+
+            <section className="surface section-card insights-card">
+              <div className="section-head compact insights-head">
+                <div>
+                  <p className="eyebrow">Insights</p>
+                  <h2>{insights.greeting}</h2>
+                </div>
+                <span className={clsx("status-pill", insights.confidence.level === "high" ? "ok" : insights.confidence.level === "low" ? "warning" : "")}>
+                  {insights.confidence.label}
+                </span>
+              </div>
+              {insights.lastCheckLabel ? <p className="subtle insights-meta">{insights.lastCheckLabel}</p> : null}
+              <p className="insights-summary">{insights.sinceLastCheck}</p>
+
+              <div className="insights-grid">
+                <article className="insight-section">
+                  <span className="eyebrow">Compared with recent periods</span>
+                  <div className="insight-list">
+                    {insights.comparisons.map((item) => (
+                      <p key={item.id} className={clsx("insight-line", item.tone && `tone-${item.tone}`)}>
+                        {item.text}
+                      </p>
+                    ))}
+                  </div>
+                </article>
+
+                <article className="insight-section">
+                  <span className="eyebrow">What changed</span>
+                  <div className="insight-list">
+                    {insights.changes.map((item) => (
+                      <p key={item.id} className={clsx("insight-line", item.tone && `tone-${item.tone}`)}>
+                        {item.text}
+                      </p>
+                    ))}
+                  </div>
+                </article>
+
+                <article className="insight-section">
+                  <span className="eyebrow">Worth watching</span>
+                  <div className="insight-list">
+                    {insights.watchouts.map((item) => (
+                      <p key={item.id} className={clsx("insight-line", item.tone && `tone-${item.tone}`)}>
+                        {item.text}
+                      </p>
+                    ))}
+                  </div>
+                </article>
+
+                <article className="insight-section insight-action">
+                  <span className="eyebrow">Suggested next action</span>
+                  <p className="insight-recommendation">{insights.recommendation}</p>
+                  <p className="subtle">{insights.confidence.reason}</p>
+                </article>
               </div>
             </section>
 
@@ -506,7 +855,7 @@ export default function HomePage() {
                     <h2>Recent liquid trend</h2>
                   </div>
                 </div>
-                <TrendChart snapshots={snapshots.slice(-8)} />
+                <TrendChart snapshots={snapshots.slice(-8)} compact />
               </section>
 
               <section className="surface section-card">
@@ -817,7 +1166,8 @@ export default function HomePage() {
                   ? "Monthly cashflow is positive, so runway is not a constraint right now."
                   : `Monthly burn is ${formatAud(Math.abs(liquidProjection.monthlyNet))}. At this pace, runway is about ${formatMonths(liquidProjection.runwayMonths)}.`}
               </div>
-              <div className="projection-list">
+              <ProjectionChart points={liquidProjection.series} startingBalance={view.totals.liquid} />
+              <div className="projection-list projection-list-grid">
                 {liquidProjection.series.map((point) => (
                   <div key={point.label} className="projection-row">
                     <div>
@@ -876,23 +1226,159 @@ export default function HomePage() {
 
               <TrendChart
                 points={bankTrend.points}
+                compact
                 emptyLabel="Add monthly bank balances to build a bank trend."
               />
 
+              <div className="import-card inset-surface">
+                <div className="section-head compact">
+                  <div>
+                    <p className="eyebrow">Ubank Statement Import</p>
+                    <h3>Import Ubank CSV</h3>
+                  </div>
+                </div>
+                <p className="subtle">Upload one or more Ubank CSV or PDF statements, review them together, then import only the valid non-duplicate month-end balances for each account.</p>
+                <div
+                  className={clsx("import-dropzone", ubankDragActive && "active")}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    setUbankDragActive(true);
+                  }}
+                  onDragLeave={(event) => {
+                    if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                      return;
+                    }
+                    setUbankDragActive(false);
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    setUbankDragActive(false);
+                    void handleUbankCsvUpload(event.dataTransfer.files);
+                  }}
+                >
+                  <div className="import-actions">
+                    <label className="secondary-button file-trigger" htmlFor="ubank-csv-input">
+                      Select CSV files
+                    </label>
+                    <span className="subtle">or drag and drop multiple CSV or PDF statements here</span>
+                  </div>
+                </div>
+                <div className="import-actions">
+                  <input
+                    id="ubank-csv-input"
+                    aria-label="Import Ubank statement files"
+                    className="hidden-file-input"
+                    type="file"
+                    accept=".csv,text/csv,.pdf,application/pdf"
+                    multiple
+                    onChange={(event) => {
+                      void handleUbankCsvUpload(event.target.files);
+                      event.currentTarget.value = "";
+                    }}
+                  />
+                </div>
+                {ubankImportMessage ? <p className="subtle">{ubankImportMessage}</p> : null}
+                {ubankImportError ? <p className="error-banner">{ubankImportError}</p> : null}
+                {ubankImportItems.length ? (
+                  <div className="import-review">
+                    <div className="import-results">
+                      {ubankImportItems.map((item) => (
+                        <article key={item.id} className={clsx("import-result-row", item.status)}>
+                          <div className="import-result-main">
+                            <strong>{item.fileName}</strong>
+                            <span>
+                              {item.review
+                                ? `${item.review.statementLabel} • ${item.review.endingBalanceAud === null ? "Ending balance needed" : formatAud(item.review.endingBalanceAud)} • ${item.review.transactionCount} transactions`
+                                : item.error ?? "Could not read this file."}
+                            </span>
+                            {item.review?.accountName ? (
+                              <span>
+                                {item.review.accountName}
+                                {item.review.accountId ? ` • ${item.review.accountId}` : ""}
+                              </span>
+                            ) : null}
+                            {item.duplicateReason ? <span>{item.duplicateReason}</span> : null}
+                            {item.status === "needs_input" ? (
+                              <label className="import-balance-field">
+                                <span>Ending balance in AUD</span>
+                                <input
+                                  inputMode="decimal"
+                                  value={item.manualBalanceAud ?? ""}
+                                  onChange={(event) =>
+                                    setUbankImportItems((current) =>
+                                      current.map((currentItem) =>
+                                        currentItem.id === item.id ? { ...currentItem, manualBalanceAud: event.target.value } : currentItem,
+                                      ),
+                                    )
+                                  }
+                                  placeholder="10500.50"
+                                />
+                              </label>
+                            ) : null}
+                          </div>
+                          <span
+                            className={clsx(
+                              "status-pill",
+                              item.status === "ready" ? "ok" : item.status === "duplicate" ? "warning" : item.status === "needs_input" ? "warning" : "danger",
+                            )}
+                          >
+                            {item.status === "ready"
+                              ? "Ready to import"
+                              : item.status === "needs_input"
+                                ? "Needs ending balance"
+                                : item.status === "duplicate"
+                                  ? "Duplicate skipped"
+                                  : "Parse error"}
+                          </span>
+                        </article>
+                      ))}
+                    </div>
+                    <div className="modal-actions">
+                      <button
+                        className="secondary-button"
+                        onClick={() => {
+                          setUbankImportItems([]);
+                          setUbankImportMessage(null);
+                          setUbankImportError(null);
+                        }}
+                        type="button"
+                      >
+                        Cancel
+                      </button>
+                      <button className="primary-button" onClick={saveImportedBankHistory} type="button">
+                        Import valid statements
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+
               {bankHistory.length ? (
                 <div className="entry-list">
-                  {[...bankHistory]
+                  {[...groupedBankHistory]
                     .sort((left, right) => right.month.localeCompare(left.month))
-                    .map((entry) => (
-                      <EntryRow
-                        key={entry.id}
-                        title={monthNameFromValue(entry.month)}
-                        subtitle="Ending bank balance"
-                        notes={entry.notes}
-                        amount={formatAud(entry.endingBalanceAud)}
-                        onEdit={() => setBankHistoryDraft(makeBankHistoryDraftFromExisting(entry))}
-                        onDelete={() => deleteBankHistoryEntry(entry.id)}
-                      />
+                    .map((group) => (
+                      <div key={group.month} className="history-group inset-surface">
+                        <div className="group-head">
+                          <div className="group-title">
+                            <h3>{monthNameFromValue(group.month)}</h3>
+                          </div>
+                          <span>{formatAud(group.totalAud)}</span>
+                        </div>
+                        <div className="entry-list">
+                          {group.accounts.map((entry) => (
+                            <EntryRow
+                              key={entry.id}
+                              title={entry.accountName ?? "Bank account"}
+                              subtitle={entry.accountId ? `Account ${entry.accountId}` : "Ending bank balance"}
+                              notes={entry.notes}
+                              amount={formatAud(entry.endingBalanceAud)}
+                              onEdit={() => setBankHistoryDraft(makeBankHistoryDraftFromExisting(entry))}
+                              onDelete={() => deleteBankHistoryEntry(entry.id)}
+                            />
+                          ))}
+                        </div>
+                      </div>
                     ))}
                 </div>
               ) : (
@@ -933,7 +1419,7 @@ export default function HomePage() {
                 </div>
               ) : (
                 <>
-                  <TrendChart snapshots={snapshots.slice(-12)} />
+                  <TrendChart snapshots={snapshots.slice(-12)} compact />
                   <div className="snapshot-list">
                     {[...snapshots].reverse().slice(0, 12).map((snapshot, index, source) => {
                       const previous = source[index + 1];
@@ -968,7 +1454,9 @@ export default function HomePage() {
               )}
             </section>
           </section>
-        ) : null}
+	        ) : null}
+          </section>
+        </div>
       </div>
 
       {draft ? (

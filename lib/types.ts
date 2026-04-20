@@ -75,6 +75,8 @@ export interface ExpenseEntry extends BaseEntry {
 export interface BankHistoryEntry extends BaseEntry {
   month: string;
   endingBalanceAud: number;
+  accountName?: string;
+  accountId?: string;
 }
 
 export interface Scenario extends BaseEntry {
@@ -105,6 +107,8 @@ export interface BankHistoryDraft {
   createdAt?: string;
   month: string;
   endingBalanceAud: string;
+  accountName: string;
+  accountId: string;
   notes: string;
 }
 
@@ -156,6 +160,31 @@ export interface RefreshInsightMover {
 export interface RefreshInsight {
   categories: RefreshInsightCategory[];
   movers: RefreshInsightMover[];
+}
+
+export type InsightConfidenceLevel = "high" | "medium" | "low";
+
+export interface InsightSectionItem {
+  id: string;
+  text: string;
+  tone?: "neutral" | "positive" | "negative" | "warning";
+}
+
+export interface InsightConfidenceSummary {
+  level: InsightConfidenceLevel;
+  label: string;
+  reason: string;
+}
+
+export interface DashboardInsights {
+  greeting: string;
+  lastCheckLabel: string | null;
+  sinceLastCheck: string;
+  comparisons: InsightSectionItem[];
+  changes: InsightSectionItem[];
+  watchouts: InsightSectionItem[];
+  recommendation: string;
+  confidence: InsightConfidenceSummary;
 }
 
 export interface PortfolioSnapshot {
@@ -239,6 +268,43 @@ export interface BankTrendSummary {
   averageMonthlyChangeAud: number | null;
 }
 
+export interface UbankTransactionRow {
+  date: string;
+  description: string;
+  debitAud: number | null;
+  creditAud: number | null;
+  amountAud: number | null;
+  balanceAud: number | null;
+}
+
+export interface UbankImportReview {
+  fileName: string;
+  accountName: string | null;
+  accountId: string | null;
+  statementLabel: string;
+  statementStartDate: string | null;
+  statementEndDate: string | null;
+  detectedMonth: string;
+  endingBalanceAud: number | null;
+  transactionCount: number;
+  transactions: UbankTransactionRow[];
+  statementSignature: string;
+  fileFingerprint: string;
+  manualBalanceRequired?: boolean;
+}
+
+export type UbankImportItemStatus = "ready" | "needs_input" | "duplicate" | "error";
+
+export interface UbankImportBatchItem {
+  id: string;
+  fileName: string;
+  status: UbankImportItemStatus;
+  review: UbankImportReview | null;
+  error: string | null;
+  duplicateReason: string | null;
+  manualBalanceAud?: string;
+}
+
 export interface ScenarioComparison {
   scenarioNetWorth: number;
   deltaNetWorth: number;
@@ -289,6 +355,8 @@ export interface PortfolioAppState {
   prices: PriceMap;
   snapshots: PortfolioSnapshot[];
   lastRefreshedAt: string | null;
+  lastViewedAt: string | null;
+  previousViewedAt: string | null;
   incomes: IncomeEntry[];
   expenses: ExpenseEntry[];
   bankHistory: BankHistoryEntry[];

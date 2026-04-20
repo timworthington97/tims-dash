@@ -1,0 +1,10 @@
+Account Name,Ubank Everyday
+Statement Start,2026-03-01
+Statement End,2026-03-31
+
+Date,Description,Debit,Credit,Balance
+01/03/2026,Opening Balance,,,$15250.10
+03/03/2026,Salary,,3500.00,$18750.10
+05/03/2026,Groceries,124.35,,$18625.75
+12/03/2026,Electricity Bill,92.10,,$18533.65
+27/03/2026,Interest,,4.55,$18538.20
