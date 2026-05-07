@@ -8,6 +8,7 @@ import {
   Calculator,
   CircleDollarSign,
   Coins,
+  Globe2,
   History,
   Landmark,
   LayoutGrid,
@@ -31,6 +32,7 @@ import { TrendChart } from "@/components/trend-chart";
 import { parseUbankPdfText } from "@/lib/importers/ubank-pdf";
 import { parseUbankCsv } from "@/lib/importers/ubank";
 import { buildDashboardInsights } from "@/lib/insights";
+import { calculateNomadPlanner } from "@/lib/nomad-planner";
 import { AUSTRALIAN_TAX_YEAR, calculateSalaryPlanner } from "@/lib/salary-planner";
 import {
   DEFAULT_BANK_SAFETY_BUFFER_AUD,
@@ -72,9 +74,10 @@ import type {
   UbankImportBatchItem,
 } from "@/lib/types";
 
-type TabId = "dashboard" | "holdings" | "cashflow" | "salary" | "projections" | "history";
+type TabId = "dashboard" | "holdings" | "cashflow" | "salary" | "nomad" | "projections" | "history";
 type ThemeMode = "light" | "dark";
 type SalaryRentFrequency = "weekly" | "monthly";
+type NomadFxStatus = "loading" | "live" | "fallback" | "error";
 
 const THEME_STORAGE_KEY = "tims-dash-theme";
 
@@ -91,6 +94,7 @@ const tabs: { id: TabId; label: string; icon: typeof LayoutGrid }[] = [
   { id: "holdings", label: "Holdings", icon: Wallet },
   { id: "cashflow", label: "Income & Expenses", icon: Banknote },
   { id: "salary", label: "Salary Planner", icon: Calculator },
+  { id: "nomad", label: "Nomad Planner", icon: Globe2 },
   { id: "projections", label: "Projections", icon: TrendingUp },
   { id: "history", label: "History", icon: History },
 ];
@@ -105,6 +109,66 @@ const bankRangeOptions: { id: BankTrendRange; label: string }[] = [
   { id: "6m", label: "6m" },
   { id: "12m", label: "12m" },
   { id: "all", label: "All" },
+];
+
+const salaryRentPresets: { city: string; weeklyAud: number }[] = [
+  { city: "Sydney", weeklyAud: 930 },
+  { city: "Melbourne", weeklyAud: 550 },
+  { city: "Brisbane", weeklyAud: 650 },
+  { city: "Perth", weeklyAud: 625 },
+  { city: "Adelaide", weeklyAud: 570 },
+  { city: "Canberra", weeklyAud: 600 },
+];
+
+const nomadScenarioPresets = [
+  {
+    label: "Tokyo",
+    country: "Japan",
+    city: "Tokyo",
+    currencyCode: "JPY",
+    fallbackAudExchangeRate: 0.00884,
+    rentSourceLabel: "Numbeo Tokyo city-centre 1-bedroom benchmark, checked May 2026",
+    monthlyRent: 216_000,
+    monthlyLivingExpenses: 220_000,
+    desiredMonthlySavings: 120_000,
+    monthlyBuffer: 60_000,
+  },
+  {
+    label: "Bangkok",
+    country: "Thailand",
+    city: "Bangkok",
+    currencyCode: "THB",
+    fallbackAudExchangeRate: 0.04289,
+    rentSourceLabel: "Central Bangkok 1-bedroom guide range, checked May 2026",
+    monthlyRent: 35_000,
+    monthlyLivingExpenses: 42_000,
+    desiredMonthlySavings: 25_000,
+    monthlyBuffer: 12_000,
+  },
+  {
+    label: "Lisbon",
+    country: "Portugal",
+    city: "Lisbon",
+    currencyCode: "EUR",
+    fallbackAudExchangeRate: 1.6238,
+    rentSourceLabel: "Lisbon central 1-bedroom benchmark, checked May 2026",
+    monthlyRent: 1_500,
+    monthlyLivingExpenses: 1_150,
+    desiredMonthlySavings: 750,
+    monthlyBuffer: 300,
+  },
+  {
+    label: "Bali",
+    country: "Indonesia",
+    city: "Bali",
+    currencyCode: "IDR",
+    fallbackAudExchangeRate: 0.00008,
+    rentSourceLabel: "Bali Seminyak/Canggu 1-bedroom listing benchmark, checked May 2026",
+    monthlyRent: 18_000_000,
+    monthlyLivingExpenses: 18_000_000,
+    desiredMonthlySavings: 10_000_000,
+    monthlyBuffer: 5_000_000,
+  },
 ];
 
 function getSnapshotLiquidValue(snapshot: PortfolioSnapshot) {
@@ -170,6 +234,24 @@ function describeRefreshDelta(label: string, deltaAud: number) {
 function parseMoneyInput(value: string) {
   const parsed = Number(value.replace(/[$,\s]/g, ""));
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function formatScenarioMoney(value: number, currencyCode: string) {
+  return `${currencyCode} ${Math.round(value).toLocaleString("en-AU")}`;
+}
+
+function formatAudEquivalent(value: number) {
+  return `AUD ${Math.round(value).toLocaleString("en-AU")}`;
+}
+
+function formatAudPerWeekFromMonthly(monthlyValue: number, audExchangeRate: number) {
+  const weeklyAud = (monthlyValue * audExchangeRate * 12) / 52;
+  return `${formatAud(weeklyAud)} / week`;
+}
+
+function findNomadPresetByCurrency(currencyCode: string) {
+  const normalizedCurrency = currencyCode.trim().toUpperCase();
+  return nomadScenarioPresets.find((preset) => preset.currencyCode === normalizedCurrency) ?? null;
 }
 
 function rangeLabel(range: BankTrendRange) {
@@ -291,10 +373,95 @@ export default function HomePage() {
   const [salaryPlannerTargetSavings, setSalaryPlannerTargetSavings] = useState("");
   const [salaryPlannerMedicare, setSalaryPlannerMedicare] = useState(true);
   const [salaryPlannerHelp, setSalaryPlannerHelp] = useState(false);
+  const [nomadCountry, setNomadCountry] = useState("Japan");
+  const [nomadCity, setNomadCity] = useState("Tokyo");
+  const [nomadCurrency, setNomadCurrency] = useState("JPY");
+  const [nomadAudExchangeRate, setNomadAudExchangeRate] = useState("0.00884");
+  const [nomadFxStatus, setNomadFxStatus] = useState<NomadFxStatus>("loading");
+  const [nomadFxSource, setNomadFxSource] = useState("Loading live AUD rate");
+  const [nomadFxDate, setNomadFxDate] = useState<string | null>(null);
+  const [nomadRentSource, setNomadRentSource] = useState(nomadScenarioPresets[0].rentSourceLabel);
+  const [nomadRent, setNomadRent] = useState("216000");
+  const [nomadLivingExpenses, setNomadLivingExpenses] = useState("220000");
+  const [nomadSavingsTarget, setNomadSavingsTarget] = useState("120000");
+  const [nomadBuffer, setNomadBuffer] = useState("60000");
 
   useEffect(() => {
     document.documentElement.dataset.theme = themeMode;
   }, [themeMode]);
+
+  useEffect(() => {
+    const currencyCode = nomadCurrency.trim().toUpperCase().replace(/[^A-Z]/g, "").slice(0, 3);
+    const presetFallback = findNomadPresetByCurrency(currencyCode);
+    const fallbackRate = presetFallback?.fallbackAudExchangeRate ?? 1;
+    const controller = new AbortController();
+    const applyFxState = (callback: () => void) => {
+      queueMicrotask(() => {
+        if (!controller.signal.aborted) {
+          callback();
+        }
+      });
+    };
+
+    if (!currencyCode) {
+      applyFxState(() => {
+        setNomadFxStatus("fallback");
+        setNomadAudExchangeRate("1");
+        setNomadFxSource("Enter a currency code to load AUD conversion");
+        setNomadFxDate(null);
+      });
+      return () => controller.abort();
+    }
+
+    if (currencyCode === "AUD") {
+      applyFxState(() => {
+        setNomadFxStatus("live");
+        setNomadAudExchangeRate("1");
+        setNomadFxSource("Same currency");
+        setNomadFxDate(new Date().toISOString());
+      });
+      return () => controller.abort();
+    }
+
+    applyFxState(() => {
+      setNomadFxStatus("loading");
+      setNomadFxSource("Loading live daily AUD rate");
+      setNomadFxDate(null);
+    });
+
+    fetch(`/api/fx?from=${encodeURIComponent(currencyCode)}&to=AUD`, {
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        const payload = (await response.json()) as {
+          rate?: number;
+          date?: string;
+          source?: string;
+          error?: string;
+        };
+
+        if (!response.ok || !Number.isFinite(payload.rate)) {
+          throw new Error(payload.error ?? "Could not load the live exchange rate.");
+        }
+
+        setNomadAudExchangeRate(String(payload.rate));
+        setNomadFxStatus("live");
+        setNomadFxSource(payload.source ?? "Live daily exchange-rate API");
+        setNomadFxDate(payload.date ?? new Date().toISOString());
+      })
+      .catch((error) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        setNomadAudExchangeRate(String(fallbackRate));
+        setNomadFxStatus("error");
+        setNomadFxSource(error instanceof Error ? `Live FX failed; using preset fallback (${error.message})` : "Live FX failed; using preset fallback");
+        setNomadFxDate(null);
+      });
+
+    return () => controller.abort();
+  }, [nomadCurrency]);
 
   const toggleTheme = () => {
     const nextTheme: ThemeMode = themeMode === "dark" ? "light" : "dark";
@@ -494,8 +661,61 @@ export default function HomePage() {
       ),
     [salaryPlannerExpenses, salaryPlannerHelp, salaryPlannerMedicare],
   );
+  const cityRentComparisons = useMemo(() => {
+    const annualSalary = parseMoneyInput(salaryPlannerSalary);
+    const comparisons = salaryRentPresets.map((preset) => {
+      const monthlyRent = (preset.weeklyAud * 52) / 12;
+      const scenario = calculateSalaryPlanner({
+        annualSalary,
+        monthlyExpenses: cashflow.monthlyExpenses + salaryPlannerExtraExpenseAmount + monthlyRent,
+        includeMedicareLevy: salaryPlannerMedicare,
+        includeHelpRepayment: salaryPlannerHelp,
+      });
+
+      return {
+        city: preset.city,
+        weeklyRent: preset.weeklyAud,
+        monthlyRent,
+        monthlySurplus: scenario.savingsProjection.monthlySurplus,
+        yearlySurplus: scenario.savingsProjection.twelveMonths,
+        cashPositionInTwelveMonths: view.totals.cash + scenario.savingsProjection.twelveMonths,
+      };
+    });
+    const strongest = [...comparisons].sort((left, right) => right.monthlySurplus - left.monthlySurplus)[0] ?? null;
+    const mostExpensive = [...comparisons].sort((left, right) => left.monthlySurplus - right.monthlySurplus)[0] ?? null;
+    const selectedCity = comparisons.find((item) => Math.abs(item.monthlyRent - salaryPlannerRentAmount) < 0.01) ?? null;
+
+    return {
+      items: comparisons,
+      strongest,
+      mostExpensive,
+      selectedCity,
+    };
+  }, [
+    cashflow.monthlyExpenses,
+    salaryPlannerExtraExpenseAmount,
+    salaryPlannerHelp,
+    salaryPlannerMedicare,
+    salaryPlannerRentAmount,
+    salaryPlannerSalary,
+    view.totals.cash,
+  ]);
   const salaryPlannerTwelveMonthCashChange = salaryPlanner.savingsProjection.monthlySurplus * 12;
   const salaryPlannerTwelveMonthCashPosition = view.totals.cash + salaryPlannerTwelveMonthCashChange;
+  const nomadPlanner = useMemo(
+    () =>
+      calculateNomadPlanner({
+        country: nomadCountry,
+        city: nomadCity,
+        currencyCode: nomadCurrency.trim().toUpperCase() || "AUD",
+        audExchangeRate: parseMoneyInput(nomadAudExchangeRate) || 1,
+        monthlyRent: parseMoneyInput(nomadRent),
+        monthlyLivingExpenses: parseMoneyInput(nomadLivingExpenses),
+        desiredMonthlySavings: parseMoneyInput(nomadSavingsTarget),
+        monthlyBuffer: parseMoneyInput(nomadBuffer),
+      }),
+    [nomadAudExchangeRate, nomadBuffer, nomadCity, nomadCountry, nomadCurrency, nomadLivingExpenses, nomadRent, nomadSavingsTarget],
+  );
   const liquidProjection = useMemo(() => buildProjection(view.totals.liquid, incomes, expenses, 12), [view.totals.liquid, incomes, expenses]);
   const bankProjection = useMemo(() => buildProjection(view.totals.cash, incomes, expenses, 12), [view.totals.cash, incomes, expenses]);
   const selectedProjection = forwardMode === "liquid" ? liquidProjection : bankProjection;
@@ -1334,6 +1554,25 @@ export default function HomePage() {
                       ))}
                     </div>
                   </div>
+                  <div className="salary-rent-presets full-span">
+                    <span>CBD 1-bedroom apartment rent preset</span>
+                    <div className="salary-preset-grid">
+                      {salaryRentPresets.map((preset) => (
+                        <button
+                          key={preset.city}
+                          className="secondary-button"
+                          onClick={() => {
+                            setSalaryPlannerRent(String(preset.weeklyAud));
+                            setSalaryPlannerRentFrequency("weekly");
+                          }}
+                          type="button"
+                        >
+                          <strong>{preset.city}</strong>
+                          <small>{formatAud(preset.weeklyAud)} / week</small>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                   <label>
                     <span>Extra monthly expenses</span>
                     <input
@@ -1513,6 +1752,286 @@ export default function HomePage() {
                 and salary-only repayment income for HELP/HECS. It does not include deductions, offsets, salary sacrifice, Medicare levy surcharge,
                 private-health settings, spouse/family thresholds, or formal tax advice.
               </p>
+            </section>
+
+            <section className="surface section-card">
+              <div className="section-head compact">
+                <div>
+                  <p className="eyebrow">Rent comparison</p>
+                  <h2>City rent impact</h2>
+                </div>
+              </div>
+              {cityRentComparisons.strongest && cityRentComparisons.mostExpensive ? (
+                <div className="city-rent-summary inset-surface">
+                  <p>
+                    <strong>{cityRentComparisons.strongest.city}</strong> would leave you with the strongest monthly surplus in this scenario.
+                  </p>
+                  <p>
+                    Compared with {cityRentComparisons.mostExpensive.city}, it leaves about{" "}
+                    <strong>
+                      {formatAud(
+                        Math.abs(cityRentComparisons.strongest.monthlySurplus - cityRentComparisons.mostExpensive.monthlySurplus),
+                      )}
+                    </strong>{" "}
+                    more per month, or{" "}
+                    <strong>
+                      {formatAud(
+                        Math.abs(cityRentComparisons.strongest.yearlySurplus - cityRentComparisons.mostExpensive.yearlySurplus),
+                      )}
+                    </strong>{" "}
+                    more per year.
+                  </p>
+                  {cityRentComparisons.selectedCity ? (
+                    <p>
+                      Your current rent field matches {cityRentComparisons.selectedCity.city}; these rows show what changes if you swap cities only.
+                    </p>
+                  ) : (
+                    <p>Your current rent field is custom; these rows compare the city presets against that same salary and tax setup.</p>
+                  )}
+                </div>
+              ) : null}
+              <div className="city-rent-table">
+                <div className="city-rent-table-head">
+                  <span>City</span>
+                  <span>Rent</span>
+                  <span>Monthly surplus</span>
+                  <span>Yearly surplus</span>
+                  <span>12-month cash</span>
+                </div>
+                {cityRentComparisons.items.map((item) => {
+                  const deltaFromCurrent = item.monthlySurplus - salaryPlanner.savingsProjection.monthlySurplus;
+                  return (
+                    <article key={item.city} className="city-rent-row">
+                      <div>
+                        <strong>{item.city}</strong>
+                        <small>
+                          {deltaFromCurrent === 0
+                            ? "Same as current scenario"
+                            : `${deltaFromCurrent > 0 ? "Leaves" : "Costs"} ${formatAud(Math.abs(deltaFromCurrent))} ${deltaFromCurrent > 0 ? "more" : "more"} / month vs current`}
+                        </small>
+                      </div>
+                      <span>{formatAud(item.weeklyRent)} / wk</span>
+                      <strong className={clsx(item.monthlySurplus >= 0 ? "positive-text" : "negative-text")}>
+                        {formatSignedAud(item.monthlySurplus)}
+                      </strong>
+                      <strong className={clsx(item.yearlySurplus >= 0 ? "positive-text" : "negative-text")}>
+                        {formatSignedAud(item.yearlySurplus)}
+                      </strong>
+                      <strong>{formatAud(item.cashPositionInTwelveMonths)}</strong>
+                    </article>
+                  );
+                })}
+              </div>
+              <p className="subtle salary-assumption-note">
+                City rent comparison is scenario-only. It uses the same salary, Medicare, HELP/HECS, saved expense baseline, and extra expense inputs, then swaps only the city rent preset.
+              </p>
+            </section>
+          </section>
+        ) : null}
+
+        {activeTab === "nomad" ? (
+          <section className="tab-panel nomad-planner-stack">
+            <section className="surface section-card nomad-hero-card">
+              <div className="section-head">
+                <div>
+                  <p className="eyebrow">Nomad Planner</p>
+                  <h2>Could I live there?</h2>
+                </div>
+              </div>
+              <p className="salary-planner-lead">
+                {nomadPlanner.scenarioSummary.summaryText} {nomadPlanner.scenarioSummary.savingsText}
+              </p>
+              <div className="metric-strip">
+                <MetricCard
+                  label="Break-even income"
+                  value={formatScenarioMoney(nomadPlanner.incomeTargets.breakEvenMonthly, nomadPlanner.scenarioSummary.currencyCode)}
+                  tone="neutral"
+                />
+                <MetricCard
+                  label="Comfortable target in AUD"
+                  value={formatAudEquivalent(nomadPlanner.incomeTargets.comfortableMonthlyAud)}
+                  tone="positive"
+                />
+                <MetricCard
+                  label="Safer target in AUD"
+                  value={formatAudEquivalent(nomadPlanner.incomeTargets.saferMonthlyAud)}
+                  tone="warning"
+                />
+              </div>
+            </section>
+
+            <section className="nomad-planner-grid">
+              <section className="surface section-card">
+                <div className="section-head compact">
+                  <div>
+                    <p className="eyebrow">Destination</p>
+                    <h2>Scenario setup</h2>
+                  </div>
+                </div>
+                <div className="form-grid salary-form-grid">
+                  <label>
+                    <span>Target country</span>
+                    <input value={nomadCountry} onChange={(event) => setNomadCountry(event.target.value)} placeholder="Japan" />
+                  </label>
+                  <label>
+                    <span>Target city</span>
+                    <input value={nomadCity} onChange={(event) => setNomadCity(event.target.value)} placeholder="Tokyo" />
+                  </label>
+                  <label>
+                    <span>Scenario currency</span>
+                    <input value={nomadCurrency} onChange={(event) => setNomadCurrency(event.target.value.toUpperCase())} placeholder="AUD" />
+                  </label>
+                  <label>
+                    <span>Live AUD conversion</span>
+                    <input
+                      inputMode="decimal"
+                      readOnly
+                      value={nomadAudExchangeRate}
+                      placeholder="1"
+                    />
+                  </label>
+                </div>
+                <div className={clsx("nomad-source-note inset-surface", nomadFxStatus === "error" ? "warning" : null)}>
+                  <strong>
+                    {nomadFxStatus === "loading" ? <LoaderCircle aria-hidden="true" className="nomad-fx-spinner" size={15} /> : null}
+                    {nomadFxStatus === "loading"
+                      ? "Fetching today's AUD rate"
+                      : nomadFxStatus === "live"
+                        ? "Using live daily AUD rate"
+                        : "Using fallback AUD rate"}
+                  </strong>
+                  <span>
+                    {nomadFxSource}
+                    {nomadFxDate ? ` • ${formatTimestamp(nomadFxDate)}` : ""}
+                  </span>
+                </div>
+                <div className="salary-rent-presets full-span nomad-presets">
+                  <span>Current 1-bedroom city rent presets</span>
+                  <div className="salary-preset-grid">
+                    {nomadScenarioPresets.map((preset) => {
+                      const liveRateAppliesToPreset = nomadPlanner.scenarioSummary.currencyCode === preset.currencyCode;
+                      const presetAudRate = liveRateAppliesToPreset ? nomadPlanner.scenarioSummary.audExchangeRate : preset.fallbackAudExchangeRate;
+
+                      return (
+                        <button
+                          key={preset.label}
+                          className="secondary-button nomad-rent-preset-button"
+                          onClick={() => {
+                            setNomadCountry(preset.country);
+                            setNomadCity(preset.city);
+                            setNomadCurrency(preset.currencyCode);
+                            setNomadAudExchangeRate(String(preset.fallbackAudExchangeRate));
+                            setNomadRentSource(preset.rentSourceLabel);
+                            setNomadRent(String(preset.monthlyRent));
+                            setNomadLivingExpenses(String(preset.monthlyLivingExpenses));
+                            setNomadSavingsTarget(String(preset.desiredMonthlySavings));
+                            setNomadBuffer(String(preset.monthlyBuffer));
+                          }}
+                          type="button"
+                        >
+                          <strong>{preset.label}</strong>
+                          <span>{formatAudPerWeekFromMonthly(preset.monthlyRent, presetAudRate)}</span>
+                          <small>{formatScenarioMoney(preset.monthlyRent, preset.currencyCode)} / month</small>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                <p className="subtle">
+                  Nomad Planner values stay in this scenario only. Rent preset: {nomadRentSource}. You can still edit the rent field manually.
+                  Currency conversion uses live daily data where available, with the preset rate only as a fallback.
+                </p>
+              </section>
+
+              <section className="surface section-card">
+                <div className="section-head compact">
+                  <div>
+                    <p className="eyebrow">Monthly costs</p>
+                    <h2>Cost assumptions</h2>
+                  </div>
+                </div>
+                <div className="form-grid salary-form-grid">
+                  <label>
+                    <span>Monthly rent</span>
+                    <input inputMode="decimal" value={nomadRent} onChange={(event) => setNomadRent(event.target.value)} placeholder="180000" />
+                  </label>
+                  <label>
+                    <span>Other monthly living expenses</span>
+                    <input
+                      inputMode="decimal"
+                      value={nomadLivingExpenses}
+                      onChange={(event) => setNomadLivingExpenses(event.target.value)}
+                      placeholder="220000"
+                    />
+                  </label>
+                  <label>
+                    <span>Desired monthly savings target</span>
+                    <input
+                      inputMode="decimal"
+                      value={nomadSavingsTarget}
+                      onChange={(event) => setNomadSavingsTarget(event.target.value)}
+                      placeholder="120000"
+                    />
+                  </label>
+                  <label>
+                    <span>Extra monthly buffer</span>
+                    <input inputMode="decimal" value={nomadBuffer} onChange={(event) => setNomadBuffer(event.target.value)} placeholder="60000" />
+                  </label>
+                </div>
+                <div className="salary-savings-grid nomad-cost-grid">
+                  <MetricCard label="Rent" value={formatScenarioMoney(nomadPlanner.monthlyCosts.rent, nomadPlanner.scenarioSummary.currencyCode)} tone="neutral" />
+                  <MetricCard
+                    label="Living expenses"
+                    value={formatScenarioMoney(nomadPlanner.monthlyCosts.livingExpenses, nomadPlanner.scenarioSummary.currencyCode)}
+                    tone="neutral"
+                  />
+                  <MetricCard
+                    label="Savings target"
+                    value={formatScenarioMoney(nomadPlanner.monthlyCosts.savingsTarget, nomadPlanner.scenarioSummary.currencyCode)}
+                    tone="positive"
+                  />
+                  <MetricCard label="Buffer" value={formatScenarioMoney(nomadPlanner.monthlyCosts.buffer, nomadPlanner.scenarioSummary.currencyCode)} tone="warning" />
+                </div>
+              </section>
+
+              <section className="surface section-card nomad-income-card">
+                <div className="section-head compact">
+                  <div>
+                    <p className="eyebrow">Required income</p>
+                    <h2>Monthly and yearly targets</h2>
+                  </div>
+                </div>
+                <div className="nomad-target-grid">
+                  <article className="target-salary-card inset-surface">
+                    <span>Bare minimum to break even</span>
+                    <strong>{formatScenarioMoney(nomadPlanner.incomeTargets.breakEvenMonthly, nomadPlanner.scenarioSummary.currencyCode)}</strong>
+                    <p className="subtle">
+                      {formatAudEquivalent(nomadPlanner.incomeTargets.breakEvenMonthlyAud)} per month •{" "}
+                      {formatAudEquivalent(nomadPlanner.incomeTargets.breakEvenYearlyAud)} per year
+                    </p>
+                  </article>
+                  <article className="target-salary-card inset-surface">
+                    <span>Comfortable target income</span>
+                    <strong>{formatScenarioMoney(nomadPlanner.incomeTargets.comfortableMonthly, nomadPlanner.scenarioSummary.currencyCode)}</strong>
+                    <p className="subtle">
+                      {formatAudEquivalent(nomadPlanner.incomeTargets.comfortableMonthlyAud)} per month •{" "}
+                      {formatAudEquivalent(nomadPlanner.incomeTargets.comfortableYearlyAud)} per year, including savings
+                    </p>
+                  </article>
+                  <article className="target-salary-card inset-surface">
+                    <span>Stretch / safer target</span>
+                    <strong>{formatScenarioMoney(nomadPlanner.incomeTargets.saferMonthly, nomadPlanner.scenarioSummary.currencyCode)}</strong>
+                    <p className="subtle">
+                      {formatAudEquivalent(nomadPlanner.incomeTargets.saferMonthlyAud)} per month •{" "}
+                      {formatAudEquivalent(nomadPlanner.incomeTargets.saferYearlyAud)} per year, including buffer
+                    </p>
+                  </article>
+                </div>
+                <div className="runway-banner">
+                  Total monthly target: {formatScenarioMoney(nomadPlanner.monthlyCosts.safer, nomadPlanner.scenarioSummary.currencyCode)} with rent,
+                  living costs, savings, and buffer included. That is roughly {formatAudEquivalent(nomadPlanner.incomeTargets.saferMonthlyAud)}.
+                </div>
+              </section>
             </section>
           </section>
         ) : null}
