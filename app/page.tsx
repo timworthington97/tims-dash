@@ -112,11 +112,11 @@ const bankRangeOptions: { id: BankTrendRange; label: string }[] = [
 ];
 
 const salaryRentPresets: { city: string; weeklyAud: number }[] = [
-  { city: "Sydney", weeklyAud: 930 },
+  { city: "Sydney", weeklyAud: 800 },
   { city: "Melbourne", weeklyAud: 550 },
-  { city: "Brisbane", weeklyAud: 650 },
+  { city: "Brisbane", weeklyAud: 625 },
   { city: "Perth", weeklyAud: 625 },
-  { city: "Adelaide", weeklyAud: 570 },
+  { city: "Adelaide", weeklyAud: 550 },
   { city: "Canberra", weeklyAud: 600 },
 ];
 
