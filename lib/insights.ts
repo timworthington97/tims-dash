@@ -1,5 +1,5 @@
 import { STALE_AFTER_MS } from "@/lib/constants";
-import { formatAud, formatRelativeTime, formatSignedAud, formatTimestamp } from "@/lib/format";
+import { formatAud, formatPercent, formatRelativeTime, formatSignedAud, formatTimestamp } from "@/lib/format";
 import { aggregateBankHistoryByMonth, buildBankTrend, calculateRunway } from "@/lib/portfolio";
 import type {
   BankHistoryEntry,
@@ -39,16 +39,69 @@ function getLiquidValue(snapshot: PortfolioSnapshot) {
   return snapshot.totalLiquidValue ?? snapshot.totalCash + snapshot.totalEtfValue + snapshot.totalCryptoValue;
 }
 
-function findSnapshotOnOrBefore(snapshots: PortfolioSnapshot[], isoDate: string) {
-  const target = new Date(isoDate).getTime();
-  return [...snapshots]
-    .reverse()
-    .find((snapshot) => snapshot.status === "success" && new Date(snapshot.timestamp).getTime() <= target) ?? null;
+function isUsableSnapshot(snapshot: PortfolioSnapshot) {
+  const liquid = getLiquidValue(snapshot);
+  return Number.isFinite(liquid) && liquid > 0;
+}
+
+function findSnapshotOnOrBefore(snapshots: PortfolioSnapshot[], timestamp: number) {
+  const usable = snapshots.filter(isUsableSnapshot);
+  const successful = [...usable].reverse().find((snapshot) => snapshot.status === "success" && new Date(snapshot.timestamp).getTime() <= timestamp);
+
+  if (successful) {
+    return successful;
+  }
+
+  return [...usable].reverse().find((snapshot) => new Date(snapshot.timestamp).getTime() <= timestamp) ?? null;
 }
 
 function findSnapshotDaysAgo(snapshots: PortfolioSnapshot[], now: number, daysAgo: number) {
-  const target = new Date(now - daysAgo * 24 * 60 * 60 * 1000).toISOString();
+  const target = now - daysAgo * 24 * 60 * 60 * 1000;
   return findSnapshotOnOrBefore(snapshots, target);
+}
+
+function findBestPeriodSnapshot(snapshots: PortfolioSnapshot[], now: number, daysAgo: number) {
+  const target = now - daysAgo * 24 * 60 * 60 * 1000;
+  const baseline = findSnapshotOnOrBefore(snapshots, target);
+  if (baseline) {
+    return {
+      snapshot: baseline,
+      approximate: false,
+    };
+  }
+
+  const oldestUsable = snapshots.filter(isUsableSnapshot)[0] ?? null;
+  return oldestUsable
+    ? {
+        snapshot: oldestUsable,
+        approximate: new Date(oldestUsable.timestamp).getTime() > target,
+      }
+    : null;
+}
+
+function buildPeriodDelta(input: DashboardInsightsInput, daysAgo: number, label: string) {
+  const match = findBestPeriodSnapshot(input.snapshots, input.now, daysAgo);
+
+  if (!match) {
+    return null;
+  }
+
+  const baselineValue = getLiquidValue(match.snapshot);
+  const delta = input.view.totals.liquid - baselineValue;
+  const percent = baselineValue === 0 ? 0 : (delta / baselineValue) * 100;
+
+  return {
+    label,
+    snapshot: match.snapshot,
+    approximate: match.approximate,
+    delta,
+    percent,
+    driver: strongestChange(input.view, match.snapshot),
+  };
+}
+
+function describePeriodWindow(delta: NonNullable<ReturnType<typeof buildPeriodDelta>>) {
+  return delta.approximate ? `since the oldest saved snapshot ${formatRelativeTime(delta.snapshot.timestamp)}` : `over ${delta.label}`;
 }
 
 function monthValueForDate(date: Date) {
@@ -82,56 +135,60 @@ function strongestChange(view: PortfolioView, baseline: PortfolioSnapshot | null
 }
 
 function describeSinceLastCheck(input: DashboardInsightsInput, checkAt: string | null) {
-  if (!checkAt) {
-    return "This is your first briefing here, so Tim’s Dash will build stronger insights after a refresh and a little more history.";
-  }
+  const day = buildPeriodDelta(input, 1, "24 hours");
+  const week = buildPeriodDelta(input, 7, "7 days");
+  const primary = week ?? day;
 
-  const baseline = findSnapshotOnOrBefore(input.snapshots, checkAt);
-  const relativeCheck = formatRelativeTime(checkAt);
+  if (primary) {
+    const absolute = Math.abs(primary.delta);
+    const driverText = primary.driver && Math.abs(primary.driver.delta) >= 10 ? `, mainly from ${primary.driver.label}` : "";
+    const periodText = primary.approximate ? `since your oldest saved snapshot ${formatRelativeTime(primary.snapshot.timestamp)}` : `over the last ${primary.label}`;
 
-  if (!baseline) {
-    if (input.lastRefreshedAt && new Date(input.lastRefreshedAt).getTime() > new Date(checkAt).getTime()) {
-      return `Since your last check ${relativeCheck}, prices were refreshed, but there is not enough earlier snapshot history yet to compare the move cleanly.`;
+    if (absolute < 10) {
+      return `Your liquid position is broadly steady ${periodText}.`;
     }
 
-    return `Since your last check ${relativeCheck}, there is not much new data to compare yet. A fresh refresh or more history will make this briefing sharper.`;
+    return `Your liquid position is ${primary.delta > 0 ? "up" : "down"} ${formatAud(absolute)} ${periodText}${driverText}.`;
   }
 
-  const liquidDelta = input.view.totals.liquid - getLiquidValue(baseline);
-  const driver = strongestChange(input.view, baseline);
-  const absolute = Math.abs(liquidDelta);
-
-  if (absolute < 10) {
-    if (driver && Math.abs(driver.delta) >= 10) {
-      return `Since your last check ${relativeCheck}, liquid money is broadly unchanged overall, although ${driver.label} shifted by ${formatSignedAud(driver.delta)}.`;
-    }
-
-    return `Since your last check ${relativeCheck}, your liquid position is broadly unchanged.`;
+  if (checkAt) {
+    return `Last check was ${formatRelativeTime(checkAt)}, but there is not enough usable snapshot history yet to compare movement cleanly.`;
   }
 
-  const direction = liquidDelta > 0 ? "up" : "down";
-  const driverText = driver ? `, mostly from ${driver.label}` : "";
-  return `Since your last check ${relativeCheck}, liquid money is ${direction} ${formatAud(absolute)}${driverText}.`;
+  return "Tim’s Dash is ready to brief you. Refresh prices and keep a few snapshots so 24-hour and 7-day movement becomes meaningful.";
 }
 
 function buildComparisons(input: DashboardInsightsInput) {
   const items: DashboardInsights["comparisons"] = [];
-  const weekSnapshot = findSnapshotDaysAgo(input.snapshots, input.now, 7);
+  const dayDelta = buildPeriodDelta(input, 1, "24h");
+  const weekDelta = buildPeriodDelta(input, 7, "7d");
   const monthSnapshot = findSnapshotDaysAgo(input.snapshots, input.now, 30);
   const threeMonthSnapshot = findSnapshotDaysAgo(input.snapshots, input.now, 90);
   const bankTrendThreeMonths = buildBankTrend(input.bankHistory, input.view.totals.cash, "3m");
   const currentRunway = calculateRunway(input.view.totals.liquid, input.cashflow.monthlyNet);
   const pastRunway = monthSnapshot ? calculateRunway(getLiquidValue(monthSnapshot), input.cashflow.monthlyNet) : null;
 
-  if (weekSnapshot) {
-    const delta = input.view.totals.liquid - getLiquidValue(weekSnapshot);
+  if (dayDelta) {
+    const period = describePeriodWindow(dayDelta);
+    items.push({
+      id: "vs-24h",
+      tone: compareTone(dayDelta.delta),
+      text:
+        Math.abs(dayDelta.delta) < 10
+          ? `Liquid money is roughly flat ${period}.`
+          : `Liquid money is ${dayDelta.delta > 0 ? "up" : "down"} ${formatAud(Math.abs(dayDelta.delta))} ${period} (${formatPercent(Math.abs(dayDelta.percent))}).`,
+    });
+  }
+
+  if (weekDelta) {
+    const period = describePeriodWindow(weekDelta);
     items.push({
       id: "vs-week",
-      tone: compareTone(delta),
+      tone: compareTone(weekDelta.delta),
       text:
-        Math.abs(delta) < 10
-          ? "Liquid money is roughly flat versus last week."
-          : `Liquid money is ${delta > 0 ? "higher" : "lower"} than last week by ${formatAud(Math.abs(delta))}.`,
+        Math.abs(weekDelta.delta) < 10
+          ? `Liquid money is roughly flat ${period}.`
+          : `Liquid money is ${weekDelta.delta > 0 ? "up" : "down"} ${formatAud(Math.abs(weekDelta.delta))} ${period} (${formatPercent(Math.abs(weekDelta.percent))}).`,
     });
   }
 
@@ -193,16 +250,25 @@ function buildComparisons(input: DashboardInsightsInput) {
 
 function buildChanges(input: DashboardInsightsInput) {
   const items: DashboardInsights["changes"] = [];
+  const weekDelta = buildPeriodDelta(input, 7, "7d");
+
+  if (weekDelta?.driver && Math.abs(weekDelta.driver.delta) >= 10) {
+    items.push({
+      id: "period-driver",
+      tone: compareTone(weekDelta.driver.delta),
+      text: `Largest seven-day driver: ${weekDelta.driver.label} at ${formatSignedAud(weekDelta.driver.delta)}.`,
+    });
+  }
 
   if (input.refreshInsight) {
     input.refreshInsight.categories
       .filter((item) => Math.abs(item.deltaAud) >= 1)
-      .slice(0, 3)
+      .slice(0, 2)
       .forEach((item) => {
         items.push({
           id: `refresh-${item.label.toLowerCase()}`,
           tone: compareTone(item.deltaAud),
-          text: `${item.label} ${Math.abs(item.deltaAud) < 0.01 ? "were unchanged" : `${item.deltaAud > 0 ? "added" : "reduced"} ${formatAud(Math.abs(item.deltaAud))}`}.`,
+          text: `Latest refresh: ${item.label} ${item.deltaAud > 0 ? "added" : "reduced"} ${formatAud(Math.abs(item.deltaAud))}.`,
         });
       });
   }

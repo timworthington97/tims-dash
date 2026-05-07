@@ -4,9 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import clsx from "clsx";
 import {
   AlertTriangle,
-  ArrowDownRight,
-  ArrowUpRight,
   Banknote,
+  Calculator,
   CircleDollarSign,
   Coins,
   History,
@@ -32,6 +31,7 @@ import { TrendChart } from "@/components/trend-chart";
 import { parseUbankPdfText } from "@/lib/importers/ubank-pdf";
 import { parseUbankCsv } from "@/lib/importers/ubank";
 import { buildDashboardInsights } from "@/lib/insights";
+import { AUSTRALIAN_TAX_YEAR, calculateSalaryPlanner } from "@/lib/salary-planner";
 import {
   DEFAULT_BANK_SAFETY_BUFFER_AUD,
   EMPTY_BANK_HISTORY_VALUES,
@@ -50,7 +50,6 @@ import {
   buildHoldingGroups,
   buildProjection,
   calculateCashflow,
-  calculateComparison,
   calculatePortfolioView,
   findBankBufferWarning,
   makeBankHistoryDraftFromExisting,
@@ -73,8 +72,9 @@ import type {
   UbankImportBatchItem,
 } from "@/lib/types";
 
-type TabId = "dashboard" | "holdings" | "cashflow" | "projections" | "history";
+type TabId = "dashboard" | "holdings" | "cashflow" | "salary" | "projections" | "history";
 type ThemeMode = "light" | "dark";
+type SalaryRentFrequency = "weekly" | "monthly";
 
 const THEME_STORAGE_KEY = "tims-dash-theme";
 
@@ -90,6 +90,7 @@ const tabs: { id: TabId; label: string; icon: typeof LayoutGrid }[] = [
   { id: "dashboard", label: "Dashboard", icon: LayoutGrid },
   { id: "holdings", label: "Holdings", icon: Wallet },
   { id: "cashflow", label: "Income & Expenses", icon: Banknote },
+  { id: "salary", label: "Salary Planner", icon: Calculator },
   { id: "projections", label: "Projections", icon: TrendingUp },
   { id: "history", label: "History", icon: History },
 ];
@@ -110,12 +111,65 @@ function getSnapshotLiquidValue(snapshot: PortfolioSnapshot) {
   return snapshot.totalLiquidValue ?? snapshot.totalCash + snapshot.totalEtfValue + snapshot.totalCryptoValue;
 }
 
-function describeDelta(label: string, deltaAud: number) {
-  if (Math.abs(deltaAud) < 0.005) {
-    return `${label} unchanged`;
+function isUsableLiquidSnapshot(snapshot: PortfolioSnapshot) {
+  const liquidValue = getSnapshotLiquidValue(snapshot);
+  return Number.isFinite(liquidValue) && liquidValue > 0;
+}
+
+function findSnapshotAtOrBefore(snapshots: PortfolioSnapshot[], timestamp: number) {
+  const usableSnapshots = snapshots.filter(isUsableLiquidSnapshot);
+  const successful = [...usableSnapshots].reverse().find((snapshot) => snapshot.status === "success" && new Date(snapshot.timestamp).getTime() <= timestamp);
+
+  if (successful) {
+    return successful;
   }
 
-  return `${label} ${deltaAud > 0 ? "increased" : "decreased"} by ${formatAud(Math.abs(deltaAud))}`;
+  return [...usableSnapshots].reverse().find((snapshot) => new Date(snapshot.timestamp).getTime() <= timestamp) ?? null;
+}
+
+function buildPeriodMovement(snapshots: PortfolioSnapshot[], currentLiquid: number, now: number, hours: number, label: string) {
+  const baseline = findSnapshotAtOrBefore(snapshots, now - hours * 60 * 60 * 1000);
+  const oldestUsableSnapshot = snapshots.filter(isUsableLiquidSnapshot)[0] ?? null;
+
+  if (!baseline && !oldestUsableSnapshot) {
+    return {
+      label,
+      available: false,
+      amount: 0,
+      percent: 0,
+      direction: "flat" as const,
+      baselineLabel: "Add more snapshot history",
+    };
+  }
+
+  const comparisonSnapshot = baseline ?? oldestUsableSnapshot;
+  const baselineValue = getSnapshotLiquidValue(comparisonSnapshot);
+  const amount = currentLiquid - baselineValue;
+  const percent = baselineValue === 0 ? 0 : (amount / baselineValue) * 100;
+  const baselineTime = new Date(comparisonSnapshot.timestamp).getTime();
+  const approximate = baseline === null && baselineTime > now - hours * 60 * 60 * 1000;
+
+  return {
+    label,
+    available: true,
+    amount,
+    percent,
+    direction: amount > 0 ? ("up" as const) : amount < 0 ? ("down" as const) : ("flat" as const),
+    baselineLabel: approximate ? `from oldest saved snapshot (${formatRelativeTime(comparisonSnapshot.timestamp)})` : formatRelativeTime(comparisonSnapshot.timestamp),
+  };
+}
+
+function describeRefreshDelta(label: string, deltaAud: number) {
+  if (Math.abs(deltaAud) < 0.005) {
+    return `${label} did not materially move`;
+  }
+
+  return `${label} ${deltaAud > 0 ? "added" : "reduced"} ${formatAud(Math.abs(deltaAud))}`;
+}
+
+function parseMoneyInput(value: string) {
+  const parsed = Number(value.replace(/[$,\s]/g, ""));
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function rangeLabel(range: BankTrendRange) {
@@ -230,6 +284,13 @@ export default function HomePage() {
   const [ubankImportError, setUbankImportError] = useState<string | null>(null);
   const [ubankImportMessage, setUbankImportMessage] = useState<string | null>(null);
   const [ubankDragActive, setUbankDragActive] = useState(false);
+  const [salaryPlannerSalary, setSalaryPlannerSalary] = useState("100000");
+  const [salaryPlannerRent, setSalaryPlannerRent] = useState("");
+  const [salaryPlannerRentFrequency, setSalaryPlannerRentFrequency] = useState<SalaryRentFrequency>("weekly");
+  const [salaryPlannerExtraExpenses, setSalaryPlannerExtraExpenses] = useState("");
+  const [salaryPlannerTargetSavings, setSalaryPlannerTargetSavings] = useState("");
+  const [salaryPlannerMedicare, setSalaryPlannerMedicare] = useState(true);
+  const [salaryPlannerHelp, setSalaryPlannerHelp] = useState(false);
 
   useEffect(() => {
     document.documentElement.dataset.theme = themeMode;
@@ -396,8 +457,45 @@ export default function HomePage() {
 
   const view = useMemo(() => calculatePortfolioView(holdings, prices, snapshots), [holdings, prices, snapshots]);
   const grouped = useMemo(() => buildHoldingGroups(view.holdings, filter), [filter, view.holdings]);
-  const comparison = useMemo(() => calculateComparison(snapshots), [snapshots]);
+  const liquidMovements = useMemo(
+    () => [
+      buildPeriodMovement(snapshots, view.totals.liquid, currentTime, 24, "24h"),
+      buildPeriodMovement(snapshots, view.totals.liquid, currentTime, 24 * 7, "7d"),
+    ],
+    [currentTime, snapshots, view.totals.liquid],
+  );
+  const primaryMovement = liquidMovements.find((movement) => movement.available) ?? null;
   const cashflow = useMemo(() => calculateCashflow(incomes, expenses), [incomes, expenses]);
+  const salaryPlannerRentInputAmount = parseMoneyInput(salaryPlannerRent);
+  const salaryPlannerRentAmount =
+    salaryPlannerRentFrequency === "weekly" ? (salaryPlannerRentInputAmount * 52) / 12 : salaryPlannerRentInputAmount;
+  const salaryPlannerExtraExpenseAmount = parseMoneyInput(salaryPlannerExtraExpenses);
+  const salaryPlannerExpenses = cashflow.monthlyExpenses + salaryPlannerRentAmount + salaryPlannerExtraExpenseAmount;
+  const salaryPlanner = useMemo(
+    () =>
+      calculateSalaryPlanner({
+        annualSalary: parseMoneyInput(salaryPlannerSalary),
+        monthlyExpenses: salaryPlannerExpenses,
+        includeMedicareLevy: salaryPlannerMedicare,
+        includeHelpRepayment: salaryPlannerHelp,
+        targetMonthlySavings: parseMoneyInput(salaryPlannerTargetSavings),
+      }),
+    [salaryPlannerSalary, salaryPlannerExpenses, salaryPlannerHelp, salaryPlannerMedicare, salaryPlannerTargetSavings],
+  );
+  const salaryScenarioPresets = useMemo(
+    () =>
+      [70_000, 85_000, 100_000, 120_000].map((salary) =>
+        calculateSalaryPlanner({
+          annualSalary: salary,
+          monthlyExpenses: salaryPlannerExpenses,
+          includeMedicareLevy: salaryPlannerMedicare,
+          includeHelpRepayment: salaryPlannerHelp,
+        }),
+      ),
+    [salaryPlannerExpenses, salaryPlannerHelp, salaryPlannerMedicare],
+  );
+  const salaryPlannerTwelveMonthCashChange = salaryPlanner.savingsProjection.monthlySurplus * 12;
+  const salaryPlannerTwelveMonthCashPosition = view.totals.cash + salaryPlannerTwelveMonthCashChange;
   const liquidProjection = useMemo(() => buildProjection(view.totals.liquid, incomes, expenses, 12), [view.totals.liquid, incomes, expenses]);
   const bankProjection = useMemo(() => buildProjection(view.totals.cash, incomes, expenses, 12), [view.totals.cash, incomes, expenses]);
   const selectedProjection = forwardMode === "liquid" ? liquidProjection : bankProjection;
@@ -637,24 +735,26 @@ export default function HomePage() {
                     {priceStatusLabel}
                   </span>
                 </div>
-                <div className={clsx("hero-figure", comparison?.direction)}>
-                  <AnimatedNumber value={view.totals.liquid} format={formatAud} />
-                </div>
+                  <div className={clsx("hero-figure", primaryMovement?.direction)}>
+                    <AnimatedNumber value={view.totals.liquid} format={formatAud} />
+                  </div>
                 <p className="hero-support subtle">
                   Liquid money includes cash, ETFs, and crypto. Manual assets are shown separately and are excluded from forward planning.
                 </p>
                 <div className="hero-meta">
-                  {comparison ? (
-                    <div className={clsx("delta-card", comparison.direction)}>
-                      {comparison.direction === "up" ? <ArrowUpRight size={18} /> : <ArrowDownRight size={18} />}
-                      <div>
-                        <strong>{formatAud(comparison.amount)}</strong>
-                        <span>{formatPercent(comparison.percent)} since previous successful refresh</span>
+                  <div className="movement-strip" aria-label="Liquid movement">
+                    {liquidMovements.map((movement) => (
+                      <div key={movement.label} className={clsx("movement-card", movement.available && movement.direction)}>
+                        <span>{movement.label}</span>
+                        <strong>{movement.available ? formatSignedAud(movement.amount) : "Not enough history"}</strong>
+                        <small>
+                          {movement.available
+                            ? `${formatPercent(Math.abs(movement.percent))} from ${movement.baselineLabel}`
+                            : movement.baselineLabel}
+                        </small>
                       </div>
-                    </div>
-                  ) : (
-                    <p className="empty-inline">No previous refresh to compare.</p>
-                  )}
+                    ))}
+                  </div>
                   <div className="stamp-stack">
                     <span>Last refreshed</span>
                     <strong>{lastRefreshedAt ? formatTimestamp(lastRefreshedAt) : "Not yet refreshed"}</strong>
@@ -816,14 +916,24 @@ export default function HomePage() {
                 <div className="section-head compact">
                   <div>
                     <p className="eyebrow">Refresh Insight</p>
-                    <h2>What changed</h2>
+                    <h2>Market movement</h2>
                   </div>
                 </div>
                 {refreshInsight ? (
                   <div className="refresh-insight">
+                    <p className="subtle">{refreshInsight.summaryText}</p>
+                    {refreshInsight.notes.length ? (
+                      <div className="refresh-lines">
+                        {refreshInsight.notes.map((note) => (
+                          <p key={note.id} className={clsx(note.tone && `tone-${note.tone}`)}>
+                            {note.text}
+                          </p>
+                        ))}
+                      </div>
+                    ) : null}
                     <div className="refresh-lines">
                       {refreshInsight.categories.map((item) => (
-                        <p key={item.label}>{describeDelta(item.label, item.deltaAud)}</p>
+                        <p key={item.label}>{describeRefreshDelta(item.label, item.deltaAud)}</p>
                       ))}
                     </div>
                     {refreshInsight.movers.length ? (
@@ -875,6 +985,10 @@ export default function HomePage() {
                     <strong>{refreshSummary ? `${refreshSummary.updated} updated • ${refreshSummary.failed} failed` : "No refresh yet"}</strong>
                   </div>
                   <div className="status-row">
+                    <span>Refresh time</span>
+                    <strong>{refreshSummary ? `${(refreshSummary.durationMs / 1000).toFixed(1)}s${refreshSummary.timedOut ? " • timed out" : ""}` : "Not run yet"}</strong>
+                  </div>
+                  <div className="status-row">
                     <span>Attention needed</span>
                     <strong>{attentionCount ? `${attentionCount} holding${attentionCount > 1 ? "s" : ""}` : "None"}</strong>
                   </div>
@@ -888,12 +1002,6 @@ export default function HomePage() {
                 {lastError ? <p className="error-banner">{lastError}</p> : null}
                 {syncError ? <p className="error-banner">{syncError}</p> : null}
                 {authMessage ? <p className="subtle">{authMessage}</p> : null}
-                {refreshSummary ? (
-                  <p className="subtle">
-                    Last refresh finished in {(refreshSummary.durationMs / 1000).toFixed(1)}s
-                    {refreshSummary.timedOut ? " and hit the time limit." : "."}
-                  </p>
-                ) : null}
                 {demoMessage ? (
                   <button className="secondary-button full-width" onClick={clearDemoMessage} type="button">
                     {demoMessage}
@@ -1140,6 +1248,271 @@ export default function HomePage() {
                   <span>Add your recurring monthly costs to see monthly burn and runway.</span>
                 </div>
               )}
+            </section>
+          </section>
+        ) : null}
+
+        {activeTab === "salary" ? (
+          <section className="tab-panel salary-planner-stack">
+            <section className="surface section-card salary-hero-card">
+              <div className="section-head">
+                <div>
+                  <p className="eyebrow">Australia Salary Planner</p>
+                  <h2>What would this salary actually change?</h2>
+                </div>
+              </div>
+              <p className="salary-planner-lead">
+                At {formatAud(salaryPlanner.taxBreakdown.grossAnnualSalary)} gross, estimated take-home is{" "}
+                <strong>{formatAud(salaryPlanner.takeHome.monthly)} per month</strong>. After your current expense benchmark, that leaves{" "}
+                <strong className={clsx(salaryPlanner.savingsProjection.monthlySurplus >= 0 ? "positive-text" : "negative-text")}>
+                  {formatSignedAud(salaryPlanner.savingsProjection.monthlySurplus)}
+                </strong>{" "}
+                per month.
+              </p>
+              <div className="metric-strip">
+                <MetricCard label="Net annual take-home" value={formatAud(salaryPlanner.takeHome.annual)} tone="positive" />
+                <MetricCard label="Net monthly" value={formatAud(salaryPlanner.takeHome.monthly)} tone="neutral" />
+                <MetricCard label="Monthly surplus" value={formatSignedAud(salaryPlanner.savingsProjection.monthlySurplus)} tone={salaryPlanner.savingsProjection.monthlySurplus >= 0 ? "positive" : "negative"} />
+              </div>
+            </section>
+
+            <section className="salary-planner-grid">
+              <section className="surface section-card salary-cash-position-card">
+                <div className="section-head compact">
+                  <div>
+                    <p className="eyebrow">Scenario outcome</p>
+                    <h2>Cash position in 12 months</h2>
+                  </div>
+                </div>
+                <strong>{formatAud(salaryPlannerTwelveMonthCashPosition)}</strong>
+                <p className={clsx("salary-cash-position-delta", salaryPlannerTwelveMonthCashChange >= 0 ? "positive-text" : "negative-text")}>
+                  {formatSignedAud(salaryPlannerTwelveMonthCashChange)} compared with today
+                </p>
+                <p className="subtle">
+                  Starts with your current bank cash of {formatAud(view.totals.cash)}, then applies this planner&apos;s 12-month surplus.
+                </p>
+              </section>
+
+              <section className="surface section-card">
+                <div className="section-head compact">
+                  <div>
+                    <p className="eyebrow">Inputs</p>
+                    <h2>Scenario controls</h2>
+                  </div>
+                </div>
+                <div className="form-grid salary-form-grid">
+                  <label className="full-span">
+                    <span>Annual gross salary</span>
+                    <input
+                      inputMode="decimal"
+                      value={salaryPlannerSalary}
+                      onChange={(event) => setSalaryPlannerSalary(event.target.value)}
+                      placeholder="100000"
+                    />
+                  </label>
+                  <label>
+                    <span>Hypothetical rent</span>
+                    <input
+                      inputMode="decimal"
+                      value={salaryPlannerRent}
+                      onChange={(event) => setSalaryPlannerRent(event.target.value)}
+                      placeholder={salaryPlannerRentFrequency === "weekly" ? "Weekly rent" : "Monthly rent"}
+                    />
+                  </label>
+                  <div className="salary-rent-frequency">
+                    <span>Rent frequency</span>
+                    <div className="segmented-control compact-toggle">
+                      {(["weekly", "monthly"] as const).map((frequency) => (
+                        <button
+                          key={frequency}
+                          className={clsx(salaryPlannerRentFrequency === frequency && "active")}
+                          onClick={() => setSalaryPlannerRentFrequency(frequency)}
+                          type="button"
+                        >
+                          {frequency === "weekly" ? "Weekly" : "Monthly"}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <label>
+                    <span>Extra monthly expenses</span>
+                    <input
+                      inputMode="decimal"
+                      value={salaryPlannerExtraExpenses}
+                      onChange={(event) => setSalaryPlannerExtraExpenses(event.target.value)}
+                      placeholder="Optional"
+                    />
+                  </label>
+                  <label>
+                    <span>Target monthly savings</span>
+                    <input
+                      inputMode="decimal"
+                      value={salaryPlannerTargetSavings}
+                      onChange={(event) => setSalaryPlannerTargetSavings(event.target.value)}
+                      placeholder="Optional"
+                    />
+                  </label>
+                </div>
+                <div className="salary-toggle-list">
+                  <button
+                    className={clsx("salary-toggle", salaryPlannerMedicare && "active")}
+                    onClick={() => setSalaryPlannerMedicare((current) => !current)}
+                    type="button"
+                  >
+                    <span>
+                      <strong>Include Medicare levy</strong>
+                      <small>Uses the 2% levy with the low-income phase-in.</small>
+                    </span>
+                    <i>{salaryPlannerMedicare ? "On" : "Off"}</i>
+                  </button>
+                  <button
+                    className={clsx("salary-toggle", salaryPlannerHelp && "active")}
+                    onClick={() => setSalaryPlannerHelp((current) => !current)}
+                    type="button"
+                  >
+                    <span>
+                      <strong>Include HELP/HECS</strong>
+                      <small>Uses the 2025-26 marginal study-loan repayment rules.</small>
+                    </span>
+                    <i>{salaryPlannerHelp ? "On" : "Off"}</i>
+                  </button>
+                </div>
+                <div className="salary-presets">
+                  {[70_000, 85_000, 100_000, 120_000].map((preset) => (
+                    <button key={preset} className="secondary-button" onClick={() => setSalaryPlannerSalary(String(preset))} type="button">
+                      {formatAud(preset)}
+                    </button>
+                  ))}
+                </div>
+                <p className="subtle">
+                  Expense benchmark: {formatAud(cashflow.monthlyExpenses)} from Tim&apos;s Dash expenses
+                  {salaryPlannerRentAmount > 0
+                    ? ` plus ${formatAud(salaryPlannerRentAmount)} rent per month (${formatAud(salaryPlannerRentInputAmount)} ${salaryPlannerRentFrequency})`
+                    : ""}
+                  {salaryPlannerExtraExpenseAmount > 0 ? ` plus ${formatAud(salaryPlannerExtraExpenseAmount)} extra` : ""}. Scenario inputs stay local to this planner.
+                </p>
+              </section>
+
+              <section className="surface section-card">
+                <div className="section-head compact">
+                  <div>
+                    <p className="eyebrow">Take-home</p>
+                    <h2>Tax and repayment breakdown</h2>
+                  </div>
+                </div>
+                <div className="salary-breakdown-list">
+                  <div>
+                    <span>Gross annual salary</span>
+                    <strong>{formatAud(salaryPlanner.taxBreakdown.grossAnnualSalary)}</strong>
+                  </div>
+                  <div>
+                    <span>Estimated resident income tax</span>
+                    <strong>{formatAud(salaryPlanner.taxBreakdown.incomeTax)}</strong>
+                  </div>
+                  <div>
+                    <span>Estimated Medicare levy</span>
+                    <strong>{formatAud(salaryPlanner.taxBreakdown.medicareLevy)}</strong>
+                  </div>
+                  <div>
+                    <span>Estimated HELP/HECS repayment</span>
+                    <strong>{formatAud(salaryPlanner.taxBreakdown.helpRepayment)}</strong>
+                  </div>
+                  <div className="salary-breakdown-total">
+                    <span>Net annual take-home</span>
+                    <strong>{formatAud(salaryPlanner.takeHome.annual)}</strong>
+                  </div>
+                </div>
+                <div className="metric-strip salary-frequency-strip">
+                  <MetricCard label="Monthly" value={formatAud(salaryPlanner.takeHome.monthly)} tone="neutral" />
+                  <MetricCard label="Fortnightly" value={formatAud(salaryPlanner.takeHome.fortnightly)} tone="neutral" />
+                  <MetricCard label="Weekly" value={formatAud(salaryPlanner.takeHome.weekly)} tone="neutral" />
+                </div>
+              </section>
+
+              <section className="surface section-card">
+                <div className="section-head compact">
+                  <div>
+                    <p className="eyebrow">Savings after expenses</p>
+                    <h2>Build-up forecast</h2>
+                  </div>
+                </div>
+                <div className="salary-savings-grid">
+                  <MetricCard label="Saved expenses baseline" value={formatAud(cashflow.monthlyExpenses)} tone="neutral" />
+                  <MetricCard label="Hypothetical rent" value={formatAud(salaryPlannerRentAmount)} tone={salaryPlannerRentAmount > 0 ? "warning" : "neutral"} />
+                  <MetricCard label="Total scenario expenses" value={formatAud(salaryPlanner.savingsProjection.monthlyExpenses)} tone="neutral" />
+                  <MetricCard label="Monthly surplus" value={formatSignedAud(salaryPlanner.savingsProjection.monthlySurplus)} tone={salaryPlanner.savingsProjection.monthlySurplus >= 0 ? "positive" : "negative"} />
+                  <MetricCard label="3 months" value={formatSignedAud(salaryPlanner.savingsProjection.threeMonths)} tone={salaryPlanner.savingsProjection.threeMonths >= 0 ? "positive" : "negative"} />
+                  <MetricCard label="6 months" value={formatSignedAud(salaryPlanner.savingsProjection.sixMonths)} tone={salaryPlanner.savingsProjection.sixMonths >= 0 ? "positive" : "negative"} />
+                  <MetricCard label="12 months" value={formatSignedAud(salaryPlanner.savingsProjection.twelveMonths)} tone={salaryPlanner.savingsProjection.twelveMonths >= 0 ? "positive" : "negative"} />
+                </div>
+                <div className="runway-banner">
+                  {salaryPlanner.savingsProjection.monthlySurplus >= 0
+                    ? `At this salary, you could build roughly ${formatAud(Math.max(0, salaryPlanner.savingsProjection.sixMonths))} in 6 months after your current expenses.`
+                    : `At this salary, your expense benchmark is higher than take-home by ${formatAud(Math.abs(salaryPlanner.savingsProjection.monthlySurplus))} per month.`}
+                </div>
+              </section>
+
+              <section className="surface section-card">
+                <div className="section-head compact">
+                  <div>
+                    <p className="eyebrow">Target helper</p>
+                    <h2>Salary needed</h2>
+                  </div>
+                </div>
+                {salaryPlanner.targetSalaryEstimate ? (
+                  <div className="target-salary-card inset-surface">
+                    <span>To save {formatAud(salaryPlanner.targetSalaryEstimate.targetMonthlySavings)} per month</span>
+                    <strong>{formatAud(salaryPlanner.targetSalaryEstimate.requiredGrossSalary)}</strong>
+                    <p className="subtle">
+                      Estimated take-home would be {formatAud(salaryPlanner.targetSalaryEstimate.monthlyTakeHome)} per month, leaving about{" "}
+                      {formatAud(salaryPlanner.targetSalaryEstimate.monthlySurplus)} after expenses.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="empty-panel compact-empty">
+                    <p>Add a target monthly saving amount.</p>
+                    <span>Tim&apos;s Dash will estimate the gross salary needed under the same tax assumptions.</span>
+                  </div>
+                )}
+                <div className="status-stack salary-comparison-stack">
+                  <div className="status-row">
+                    <span>Income used in this scenario</span>
+                    <strong>Salary only</strong>
+                  </div>
+                  <div className="status-row">
+                    <span>Saved Tim&apos;s Dash income</span>
+                    <strong>Excluded</strong>
+                  </div>
+                </div>
+                <p className="subtle">
+                  The planner uses your hypothetical salary as the income source. Saved recurring income from Income &amp; Expenses is not added on top.
+                </p>
+              </section>
+            </section>
+
+            <section className="surface section-card">
+              <div className="section-head compact">
+                <div>
+                  <p className="eyebrow">Quick comparison</p>
+                  <h2>Salary presets after expenses</h2>
+                </div>
+              </div>
+              <div className="salary-scenario-grid">
+                {salaryScenarioPresets.map((scenario) => (
+                  <article key={scenario.taxBreakdown.grossAnnualSalary} className="salary-scenario-card inset-surface">
+                    <span>{formatAud(scenario.taxBreakdown.grossAnnualSalary)} gross</span>
+                    <strong>{formatAud(scenario.takeHome.monthly)} / month</strong>
+                    <small className={clsx(scenario.savingsProjection.monthlySurplus >= 0 ? "positive-text" : "negative-text")}>
+                      {formatSignedAud(scenario.savingsProjection.monthlySurplus)} after expenses
+                    </small>
+                  </article>
+                ))}
+              </div>
+              <p className="subtle salary-assumption-note">
+                Planning estimate only. Uses {AUSTRALIAN_TAX_YEAR} Australian resident tax rates, Medicare levy settings for a single non-SAPTO taxpayer,
+                and salary-only repayment income for HELP/HECS. It does not include deductions, offsets, salary sacrifice, Medicare levy surcharge,
+                private-health settings, spouse/family thresholds, or formal tax advice.
+              </p>
             </section>
           </section>
         ) : null}

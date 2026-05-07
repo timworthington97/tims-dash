@@ -592,12 +592,62 @@ button {
   color: var(--text-soft);
 }
 
+.movement-strip {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  min-width: min(420px, 100%);
+}
+
+.movement-card {
+  min-width: 0;
+  padding: 12px 14px;
+  border-radius: 20px;
+  background: var(--card-gradient);
+  border: 1px solid var(--button-secondary-border);
+  box-shadow: var(--shadow-soft);
+}
+
+.movement-card span,
+.movement-card small {
+  display: block;
+  color: var(--text-muted);
+}
+
+.movement-card span {
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.movement-card strong {
+  display: block;
+  margin-top: 5px;
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
+.movement-card small {
+  margin-top: 6px;
+  font-size: 0.78rem;
+  line-height: 1.25;
+}
+
+.movement-card.up strong {
+  color: var(--accent-strong);
+}
+
+.movement-card.down strong {
+  color: var(--danger-strong);
+}
+
 .stamp-stack {
   display: flex;
   flex-direction: column;
   gap: 4px;
   text-align: right;
-  min-width: 0;
+  min-width: 130px;
 }
 
 .stamp-stack span {
@@ -1479,6 +1529,230 @@ button {
   gap: 18px;
 }
 
+.salary-planner-stack {
+  display: grid;
+  gap: 18px;
+}
+
+.salary-hero-card {
+  display: grid;
+  gap: 18px;
+}
+
+.salary-planner-lead {
+  margin: 0;
+  max-width: 76ch;
+  color: var(--text-soft);
+  font-size: clamp(1.05rem, 1.7vw, 1.35rem);
+  line-height: 1.5;
+}
+
+.salary-planner-lead strong {
+  color: var(--text);
+}
+
+.salary-planner-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.salary-cash-position-card {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 10px;
+  background: var(--card-accent-gradient);
+}
+
+.salary-cash-position-card > strong {
+  font-size: clamp(2.2rem, 6vw, 4.4rem);
+  line-height: 0.95;
+  letter-spacing: -0.07em;
+}
+
+.salary-cash-position-delta {
+  margin: 0;
+  font-size: clamp(1rem, 2vw, 1.25rem);
+  font-weight: 700;
+}
+
+.salary-form-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.salary-toggle-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.salary-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: 22px;
+  border: 1px solid var(--button-secondary-border);
+  background: var(--surface-control);
+  color: var(--text);
+  text-align: left;
+  box-shadow: var(--elevation-control);
+}
+
+.salary-toggle span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.salary-toggle strong {
+  font-size: 0.92rem;
+}
+
+.salary-toggle small {
+  color: var(--text-soft);
+  line-height: 1.35;
+}
+
+.salary-toggle i {
+  flex: 0 0 auto;
+  min-width: 48px;
+  padding: 8px 10px;
+  border-radius: 999px;
+  background: var(--surface-field);
+  color: var(--text-soft);
+  font-style: normal;
+  text-align: center;
+  box-shadow: var(--elevation-field);
+}
+
+.salary-toggle.active {
+  border-color: var(--edge-active);
+  box-shadow: var(--elevation-control-active);
+}
+
+.salary-toggle.active i {
+  color: var(--accent);
+}
+
+.salary-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 14px 0;
+}
+
+.salary-rent-frequency {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.salary-rent-frequency > span {
+  color: var(--text-soft);
+  font-size: 0.9rem;
+}
+
+.salary-rent-frequency .compact-toggle {
+  margin-bottom: 0;
+  width: fit-content;
+}
+
+.salary-breakdown-list,
+.salary-comparison-stack {
+  margin-bottom: 16px;
+}
+
+.salary-breakdown-list {
+  display: grid;
+  gap: 10px;
+}
+
+.salary-breakdown-list div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 13px 15px;
+  border-radius: 18px;
+  background: var(--surface-field);
+  border: 1px solid var(--edge-control);
+  box-shadow: var(--elevation-field);
+}
+
+.salary-breakdown-list span {
+  color: var(--text-soft);
+}
+
+.salary-breakdown-list strong {
+  text-align: right;
+}
+
+.salary-breakdown-list .salary-breakdown-total {
+  background: var(--card-gradient);
+  box-shadow: var(--shadow-soft);
+}
+
+.salary-breakdown-total strong {
+  color: var(--accent);
+}
+
+.salary-frequency-strip .metric-card,
+.salary-savings-grid .metric-card {
+  flex-basis: 150px;
+}
+
+.salary-savings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.target-salary-card {
+  display: grid;
+  gap: 8px;
+  padding: 18px;
+  border-radius: 24px;
+  margin-bottom: 16px;
+}
+
+.target-salary-card span,
+.salary-scenario-card span,
+.salary-scenario-card small {
+  color: var(--text-soft);
+}
+
+.target-salary-card strong {
+  font-size: clamp(1.8rem, 4vw, 2.7rem);
+  letter-spacing: -0.05em;
+}
+
+.salary-scenario-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.salary-scenario-card {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border-radius: 22px;
+}
+
+.salary-scenario-card strong {
+  font-size: 1.05rem;
+  letter-spacing: -0.03em;
+}
+
+.salary-assumption-note {
+  margin: 16px 0 0;
+}
+
 .projection-card {
   gap: 16px;
 }
@@ -1587,6 +1861,15 @@ button {
 .refresh-lines p {
   margin: 0;
   color: var(--text);
+}
+
+.refresh-lines p.tone-positive {
+  color: var(--positive-text);
+}
+
+.refresh-lines p.tone-negative,
+.refresh-lines p.tone-warning {
+  color: var(--warning-text);
 }
 
 .mover-row {
@@ -1989,8 +2272,24 @@ button {
     min-width: 0;
   }
 
+  .hero-meta {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .movement-strip {
+    min-width: 0;
+  }
+
   .hero-side-grid,
-  .dashboard-grid {
+  .dashboard-grid,
+  .salary-planner-grid,
+  .salary-savings-grid,
+  .salary-scenario-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .salary-form-grid {
     grid-template-columns: 1fr;
   }
 
@@ -2117,6 +2416,7 @@ button {
 
 .summary-card,
 .delta-card,
+.movement-card,
 .workspace-intro-pill {
   background: var(--surface-control);
   border-color: var(--edge-control);

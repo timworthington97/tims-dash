@@ -450,7 +450,7 @@ export function usePortfolioApp() {
       const insightView = calculatePortfolioView(state.holdings, insightPrices, state.snapshots);
       const snapshot = createSnapshot(pricedView.holdings, new Date().toISOString());
       setRefreshSummary(payload.summary);
-      setRefreshInsight(buildRefreshInsight(previousView, insightView));
+      setRefreshInsight(buildRefreshInsight(previousView, insightView, payload.summary, payload.prices ?? []));
 
       setState((current) => ({
         ...current,

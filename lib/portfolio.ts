@@ -28,6 +28,7 @@ import type {
   PriceRequestItem,
   PriceRequestResult,
   RefreshInsight,
+  RefreshSummary,
   ProjectionSummary,
   Scenario,
   ScenarioComparison,
@@ -456,34 +457,70 @@ export function calculateComparison(snapshots: PortfolioSnapshot[]) {
   };
 }
 
-export function buildRefreshInsight(previousView: PortfolioView, nextView: PortfolioView): RefreshInsight | null {
+function isSuccessfulPriceResult(result: PriceRequestResult) {
+  return result.status === "live" || result.status === "delayed" || result.status === "mock";
+}
+
+export function buildRefreshInsight(
+  previousView: PortfolioView,
+  nextView: PortfolioView,
+  summary?: RefreshSummary,
+  priceResults: PriceRequestResult[] = [],
+): RefreshInsight | null {
+  const successfulIds = new Set(priceResults.filter(isSuccessfulPriceResult).map((result) => result.holdingId));
+  const staleResults = priceResults.filter((result) => result.status === "stale");
+  const errorResults = priceResults.filter((result) => result.status === "error");
+  const failed = summary?.failed ?? staleResults.length + errorResults.length;
   const categories = [
     { label: "ETFs", deltaAud: nextView.totals.etf - previousView.totals.etf },
     { label: "Crypto", deltaAud: nextView.totals.crypto - previousView.totals.crypto },
-    { label: "Cash", deltaAud: nextView.totals.cash - previousView.totals.cash },
-    { label: "Debts", deltaAud: nextView.totals.debt - previousView.totals.debt },
   ];
 
   const movers = nextView.holdings
     .map((holding) => {
       const previous = previousView.holdings.find((item) => item.id === holding.id);
       return {
+        id: holding.id,
         name: holding.name,
         deltaAud: holding.valueAud - (previous?.valueAud ?? 0),
         type: holding.type,
       };
     })
     .filter((item) => item.type === "etf" || item.type === "crypto")
+    .filter((item) => !successfulIds.size || successfulIds.has(item.id))
     .filter((item) => Math.abs(item.deltaAud) > 0.009)
     .sort((left, right) => Math.abs(right.deltaAud) - Math.abs(left.deltaAud))
     .slice(0, 3)
     .map(({ name, deltaAud }) => ({ name, deltaAud }));
 
-  if (!movers.length && categories.every((item) => Math.abs(item.deltaAud) < 0.009)) {
+  const notes: RefreshInsight["notes"] = [];
+  if (failed > 0) {
+    notes.push({
+      id: "partial-attribution",
+      tone: "warning",
+      text: "Movement attribution excludes stale or failed provider updates. Check Refresh health for provider details.",
+    });
+  }
+
+  if (categories.every((item) => Math.abs(item.deltaAud) < 0.009) && (summary?.updated ?? successfulIds.size) > 0) {
+    notes.push({
+      id: "no-market-move",
+      tone: "neutral",
+      text: "ETF and crypto totals did not materially move.",
+    });
+  }
+
+  if (!movers.length && !notes.length && categories.every((item) => Math.abs(item.deltaAud) < 0.009)) {
     return null;
   }
 
-  return { categories, movers };
+  const totalMarketDelta = categories.reduce((sum, item) => sum + item.deltaAud, 0);
+  const summaryText =
+    Math.abs(totalMarketDelta) >= 0.01
+      ? `Market-priced holdings ${totalMarketDelta > 0 ? "added" : "reduced"} ${formatAud(Math.abs(totalMarketDelta))} on the latest refresh.`
+      : "Latest refresh did not materially change market-priced holdings.";
+
+  return { categories, movers, notes, summaryText };
 }
 
 export function buildHoldingGroups(holdings: ValuedHolding[], filter: HoldingType | "all"): HoldingGroup[] {

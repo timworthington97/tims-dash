@@ -157,9 +157,17 @@ export interface RefreshInsightMover {
   deltaAud: number;
 }
 
+export interface RefreshInsightNote {
+  id: string;
+  text: string;
+  tone?: "neutral" | "positive" | "negative" | "warning";
+}
+
 export interface RefreshInsight {
   categories: RefreshInsightCategory[];
   movers: RefreshInsightMover[];
+  notes: RefreshInsightNote[];
+  summaryText: string;
 }
 
 export type InsightConfidenceLevel = "high" | "medium" | "low";

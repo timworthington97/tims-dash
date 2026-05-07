@@ -1,6 +1,14 @@
-export const ITEM_TIMEOUT_MS = 3_500;
-export const GLOBAL_REFRESH_TIMEOUT_MS = 8_000;
-export const CLIENT_REFRESH_TIMEOUT_MS = 9_000;
+function numberFromEnv(value: string | undefined, fallback: number) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+export const ITEM_TIMEOUT_MS = numberFromEnv(process.env.PRICING_ITEM_TIMEOUT_MS, 3_500);
+export const GLOBAL_REFRESH_TIMEOUT_MS = numberFromEnv(process.env.PRICING_GLOBAL_TIMEOUT_MS, 12_000);
+export const CLIENT_REFRESH_TIMEOUT_MS = numberFromEnv(
+  process.env.NEXT_PUBLIC_CLIENT_REFRESH_TIMEOUT_MS,
+  14_000,
+);
 export const PROVIDER_RETRY_ATTEMPTS = 2;
 
 export function wait(ms: number) {

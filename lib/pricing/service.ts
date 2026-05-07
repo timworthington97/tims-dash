@@ -7,8 +7,12 @@ const pricingMode = process.env.PRICING_MODE ?? "auto";
 const asxEtfSourceMode = process.env.ASX_ETF_SOURCE_MODE ?? "auto";
 const twelveApiKey = process.env.TWELVE_DATA_API_KEY;
 const fxCache = new Map<string, number>();
+const officialAsxQuoteCache = new Map<string, { expiresAt: number; quote: Awaited<ReturnType<typeof fetchOfficialAsxEtfQuote>> }>();
+const cryptoQuoteCache = new Map<string, { expiresAt: number; quote: Awaited<ReturnType<typeof resolveCryptoQuote>> }>();
 const supportedAsxEtfs = new Set(["ETHI", "HACK", "ASIA"]);
 const execFileAsync = promisify(execFile);
+const ASX_QUOTE_CACHE_MS = 30_000;
+const CRYPTO_QUOTE_CACHE_MS = 20_000;
 const sharedFetchHeaders = {
   "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
   Accept: "application/json,text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -316,6 +320,23 @@ async function fetchOfficialAsxEtfQuote(symbol: string) {
   };
 }
 
+async function getOfficialAsxEtfQuote(symbol: string) {
+  const cleaned = symbol.replace(/\.AX$/i, "").trim().toUpperCase();
+  const cached = officialAsxQuoteCache.get(cleaned);
+
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.quote;
+  }
+
+  const quote = await fetchOfficialAsxEtfQuote(cleaned);
+  officialAsxQuoteCache.set(cleaned, {
+    quote,
+    expiresAt: Date.now() + ASX_QUOTE_CACHE_MS,
+  });
+
+  return quote;
+}
+
 async function fetchStockAnalysisAsxQuote(symbol: string) {
   const cleaned = symbol.replace(/\.AX$/i, "").trim().toUpperCase();
   const response = await fetchWithTimeout(
@@ -376,7 +397,7 @@ async function resolveEtfQuote(symbol: string, market?: string) {
 
   if (isAsx && supportedAsxEtfs.has(normalized) && asxEtfSourceMode !== "stockanalysis") {
     try {
-      const officialQuote = await withRetry(() => fetchOfficialAsxEtfQuote(normalized), 2);
+      const officialQuote = await getOfficialAsxEtfQuote(normalized);
       const freshness = assessOfficialAsxFreshness(officialQuote.lastTradeDate);
 
       return {
@@ -529,6 +550,23 @@ async function resolveCryptoQuote(symbol: string) {
   };
 }
 
+async function getCryptoQuote(symbol: string) {
+  const normalized = symbol.trim().toUpperCase();
+  const cached = cryptoQuoteCache.get(normalized);
+
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.quote;
+  }
+
+  const quote = await resolveCryptoQuote(normalized);
+  cryptoQuoteCache.set(normalized, {
+    quote,
+    expiresAt: Date.now() + CRYPTO_QUOTE_CACHE_MS,
+  });
+
+  return quote;
+}
+
 function toMockResult(item: PriceRequestItem, error?: string): PriceRequestResult {
   const mockValue = mockPrice(item.symbol);
   return {
@@ -564,7 +602,7 @@ async function resolveSinglePrice(item: PriceRequestItem): Promise<PriceRequestR
     const quote =
       item.kind === "etf"
         ? await resolveEtfQuote(item.symbol, item.market)
-        : await withRetry(() => resolveCryptoQuote(item.symbol), 2);
+        : await withRetry(() => getCryptoQuote(item.symbol), 2);
     const fetchedAt = "fetchedAt" in quote ? quote.fetchedAt : null;
 
     return {

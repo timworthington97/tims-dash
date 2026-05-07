@@ -14,7 +14,7 @@ import type {
 } from "@/lib/types";
 
 export const STORAGE_KEY = "lattice-wealth-state";
-export const SNAPSHOT_HISTORY_LIMIT = Number(process.env.NEXT_PUBLIC_SNAPSHOT_HISTORY_LIMIT ?? process.env.SNAPSHOT_HISTORY_LIMIT ?? 24);
+export const SNAPSHOT_HISTORY_LIMIT = Number(process.env.NEXT_PUBLIC_SNAPSHOT_HISTORY_LIMIT ?? process.env.SNAPSHOT_HISTORY_LIMIT ?? 180);
 export const STALE_AFTER_MS = Number(process.env.NEXT_PUBLIC_STALE_AFTER_MINUTES ?? process.env.STALE_AFTER_MINUTES ?? 20) * 60 * 1000;
 
 export const HOLDING_TYPE_LABELS: Record<HoldingType, string> = {
