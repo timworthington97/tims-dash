@@ -322,6 +322,7 @@ export default function HomePage() {
     lastViewedAt,
     previousViewedAt,
     hasSupabase,
+    cloudWritesAllowed,
     isSignedIn,
     authReady,
     userEmail,
@@ -344,6 +345,7 @@ export default function HomePage() {
   const [bankHistoryDraft, setBankHistoryDraft] = useState<BankHistoryDraft | null>(null);
   const [currentTime, setCurrentTime] = useState(() => Date.now());
   const [forwardMode, setForwardMode] = useState<BankProjectionMode>("liquid");
+  const [projectionMode, setProjectionMode] = useState<BankProjectionMode>("liquid");
   const [bankTrendRange, setBankTrendRange] = useState<BankTrendRange>("6m");
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authEmail, setAuthEmail] = useState("");
@@ -719,6 +721,9 @@ export default function HomePage() {
   const liquidProjection = useMemo(() => buildProjection(view.totals.liquid, incomes, expenses, 12), [view.totals.liquid, incomes, expenses]);
   const bankProjection = useMemo(() => buildProjection(view.totals.cash, incomes, expenses, 12), [view.totals.cash, incomes, expenses]);
   const selectedProjection = forwardMode === "liquid" ? liquidProjection : bankProjection;
+  const projectionsPageProjection = projectionMode === "liquid" ? liquidProjection : bankProjection;
+  const projectionsPageStartingBalance = projectionMode === "liquid" ? view.totals.liquid : view.totals.cash;
+  const projectionsPageLabel = projectionMode === "liquid" ? "liquid money" : "bank cash";
   const threeMonthProjection = selectedProjection.series.slice(0, 3);
   const groupedBankHistory = useMemo(() => aggregateBankHistoryByMonth(bankHistory), [bankHistory]);
   const bankTrend = useMemo(() => buildBankTrend(bankHistory, view.totals.cash, bankTrendRange), [bankHistory, view.totals.cash, bankTrendRange]);
@@ -847,9 +852,15 @@ export default function HomePage() {
 
               <div className="side-sync-card inset-surface">
                 <p className="eyebrow">Sync</p>
-                <strong>{hasSupabase ? (isSignedIn ? "Cloud connected" : "Private sync ready") : "Local only"}</strong>
+                <strong>{hasSupabase ? (isSignedIn ? (cloudWritesAllowed ? "Cloud connected" : "Cloud read-only") : "Private sync ready") : "Local only"}</strong>
                 <span className="subtle">
-                  {hasSupabase ? (isSignedIn ? userEmail ?? "Signed in" : "Sign in to sync across devices.") : "Supabase env vars are not configured."}
+                  {hasSupabase
+                    ? isSignedIn
+                      ? cloudWritesAllowed
+                        ? userEmail ?? "Signed in"
+                        : "Local testing will not update Supabase."
+                      : "Sign in to sync across devices."
+                    : "Supabase env vars are not configured."}
                 </span>
                 {hasSupabase ? (
                   isSignedIn ? (
@@ -2042,26 +2053,55 @@ export default function HomePage() {
               <div className="section-head">
                 <div>
                   <p className="eyebrow">Projection</p>
-                  <h2>12-month liquid forecast</h2>
+                  <h2>12-month {projectionMode === "liquid" ? "liquid" : "bank cash"} forecast</h2>
+                </div>
+                <div className="section-actions">
+                  <div className="segmented-control compact-toggle" aria-label="Projection basis">
+                    {forwardModes.map((mode) => (
+                      <button
+                        key={mode.id}
+                        className={clsx(projectionMode === mode.id && "active")}
+                        onClick={() => setProjectionMode(mode.id)}
+                        type="button"
+                      >
+                        {mode.id === "liquid" ? "Liquid total" : "Bank cash only"}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
               <div className="metric-strip projection-metrics">
-                <MetricCard label="Starting liquid money" value={formatAud(view.totals.liquid)} tone="neutral" />
-                <MetricCard label="Monthly net" value={formatSignedAud(liquidProjection.monthlyNet)} tone={liquidProjection.monthlyNet >= 0 ? "positive" : "negative"} />
-                <MetricCard label="Runway" value={formatMonths(liquidProjection.runwayMonths)} tone={liquidProjection.runwayMonths === null ? "positive" : "warning"} />
+                <MetricCard
+                  label={projectionMode === "liquid" ? "Starting liquid total" : "Starting bank cash"}
+                  value={formatAud(projectionsPageStartingBalance)}
+                  tone="neutral"
+                />
+                <MetricCard
+                  label="Monthly net"
+                  value={formatSignedAud(projectionsPageProjection.monthlyNet)}
+                  tone={projectionsPageProjection.monthlyNet >= 0 ? "positive" : "negative"}
+                />
+                <MetricCard
+                  label="Runway"
+                  value={formatMonths(projectionsPageProjection.runwayMonths)}
+                  tone={projectionsPageProjection.runwayMonths === null ? "positive" : "warning"}
+                />
               </div>
               <p className="subtle">
-                Assumption: projections are based on liquid money only. Manual assets are excluded unless you actually sell them outside the app.
+                {projectionMode === "liquid"
+                  ? "Assumption: this view starts with total liquid money: bank cash, ETFs, and crypto. Manual assets are excluded unless you actually sell them outside the app."
+                  : "Assumption: this view starts with bank cash only, then applies your saved monthly income and expenses. ETFs, crypto, manual assets, and debts are excluded from the starting balance."}
               </p>
               <div className="runway-banner">
-                {liquidProjection.monthlyNet >= 0
-                  ? "Monthly cashflow is positive, so runway is not a constraint right now."
-                  : `Monthly burn is ${formatAud(Math.abs(liquidProjection.monthlyNet))}. At this pace, runway is about ${formatMonths(liquidProjection.runwayMonths)}.`}
+                {projectionsPageProjection.monthlyNet >= 0
+                  ? `Monthly cashflow is positive, so ${projectionsPageLabel} is expected to grow over the next 12 months.`
+                  : `Monthly burn is ${formatAud(Math.abs(projectionsPageProjection.monthlyNet))}. At this pace, ${projectionsPageLabel} runway is about ${formatMonths(projectionsPageProjection.runwayMonths)}.`}
               </div>
-              <ProjectionChart points={liquidProjection.series} startingBalance={view.totals.liquid} />
+              {projectionMode === "bankCash" && bankBufferWarning ? <div className="runway-banner warning-banner">{bankBufferWarning}</div> : null}
+              <ProjectionChart points={projectionsPageProjection.series} startingBalance={projectionsPageStartingBalance} />
               <div className="projection-list projection-list-grid">
-                {liquidProjection.series.map((point) => (
-                  <div key={point.label} className="projection-row">
+                {projectionsPageProjection.series.map((point) => (
+                  <div key={`${projectionMode}-${point.label}`} className="projection-row">
                     <div>
                       <strong>{point.label}</strong>
                       <span>{formatSignedAud(point.delta)} this month</span>

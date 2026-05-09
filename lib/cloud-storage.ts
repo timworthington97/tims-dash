@@ -16,6 +16,7 @@ type CloudStateRow = {
   last_refreshed_at: string | null;
   setup_complete: boolean;
   imported_local_data: boolean;
+  updated_at?: string | null;
 };
 
 function toCloudRow(userId: string, state: PortfolioAppState, options?: { importedLocalData?: boolean; setupComplete?: boolean }): CloudStateRow {
@@ -64,6 +65,7 @@ export async function loadCloudPortfolioState(client: SupabaseClient, userId: st
     state: fromCloudRow(data),
     importedLocalData: data.imported_local_data,
     setupComplete: data.setup_complete,
+    updatedAt: data.updated_at ?? null,
   };
 }
 

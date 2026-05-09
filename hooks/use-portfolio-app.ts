@@ -6,7 +6,7 @@ import { SAMPLE_BANK_HISTORY, SAMPLE_EXPENSES, SAMPLE_HOLDINGS, SAMPLE_INCOMES, 
 import { loadCloudPortfolioState, saveCloudPortfolioState } from "@/lib/cloud-storage";
 import { CLIENT_REFRESH_TIMEOUT_MS } from "@/lib/pricing/utils";
 import { buildRefreshInsight, calculatePortfolioView, createSnapshot, deriveDisplayPrices, makePriceRequestItems } from "@/lib/portfolio";
-import { loadPortfolioState, savePortfolioState } from "@/lib/storage";
+import { getPortfolioDataUpdatedAt, loadPortfolioState, loadPortfolioStateMeta, savePortfolioState } from "@/lib/storage";
 import { getSupabaseBrowserClient, hasSupabaseConfig } from "@/lib/supabase";
 import type {
   BankHistoryEntry,
@@ -19,6 +19,15 @@ import type {
   RefreshSummary,
   Scenario,
 } from "@/lib/types";
+
+type CloudSaveRequest = {
+  userId: string;
+  state: PortfolioAppState;
+  options: {
+    importedLocalData: boolean;
+    setupComplete: boolean;
+  };
+};
 
 const defaultState: PortfolioAppState = {
   holdings: [],
@@ -44,8 +53,61 @@ function hasMeaningfulState(state: PortfolioAppState) {
   );
 }
 
+function durableStateFingerprint(state: PortfolioAppState | null) {
+  if (!state) {
+    return "";
+  }
+
+  return JSON.stringify({
+    holdings: state.holdings,
+    prices: state.prices,
+    snapshots: state.snapshots,
+    lastRefreshedAt: state.lastRefreshedAt,
+    incomes: state.incomes,
+    expenses: state.expenses,
+    bankHistory: state.bankHistory,
+    scenarios: state.scenarios,
+  });
+}
+
+function isLocalStateNewer(local: PortfolioAppState | null, remote: PortfolioAppState | null, remoteSavedAt?: string | null) {
+  if (!local || !hasMeaningfulState(local)) {
+    return false;
+  }
+
+  const localMetaUpdatedAt = new Date(loadPortfolioStateMeta().updatedAt ?? "").getTime();
+  const remoteSavedAtTime = new Date(remoteSavedAt ?? "").getTime();
+  const localDataUpdatedAt = getPortfolioDataUpdatedAt(local);
+  const remoteDataUpdatedAt = getPortfolioDataUpdatedAt(remote);
+  const skewMs = 1000;
+
+  if (localDataUpdatedAt && localDataUpdatedAt > remoteDataUpdatedAt + skewMs) {
+    return true;
+  }
+
+  return Boolean(
+    Number.isFinite(localMetaUpdatedAt) &&
+      Number.isFinite(remoteSavedAtTime) &&
+      localMetaUpdatedAt > remoteSavedAtTime + skewMs &&
+      durableStateFingerprint(local) !== durableStateFingerprint(remote),
+  );
+}
+
+function canWriteCloudFromCurrentOrigin() {
+  if (process.env.NEXT_PUBLIC_ENABLE_LOCAL_CLOUD_WRITES === "true") {
+    return true;
+  }
+
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  return !["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+}
+
 export function usePortfolioApp() {
   const client = useMemo(() => getSupabaseBrowserClient(), []);
+  const cloudWritesAllowed = useMemo(() => canWriteCloudFromCurrentOrigin(), []);
   const [state, setState] = useState<PortfolioAppState>(defaultState);
   const [hydrated, setHydrated] = useState(false);
   const [refreshState, setRefreshState] = useState<"idle" | "loading">("idle");
@@ -60,6 +122,56 @@ export function usePortfolioApp() {
   const [showImportPrompt, setShowImportPrompt] = useState(false);
   const cloudReadyRef = useRef(false);
   const pendingImportRef = useRef<PortfolioAppState | null>(null);
+  const queuedCloudSaveRef = useRef<CloudSaveRequest | null>(null);
+  const cloudSaveInFlightRef = useRef(false);
+  const cloudSaveTimerRef = useRef<number | null>(null);
+
+  const flushCloudSaveQueue = useCallback(async () => {
+    if (!client || cloudSaveInFlightRef.current) {
+      return;
+    }
+
+    const request = queuedCloudSaveRef.current;
+    if (!request) {
+      return;
+    }
+
+    queuedCloudSaveRef.current = null;
+    cloudSaveInFlightRef.current = true;
+    let saved = false;
+
+    try {
+      await saveCloudPortfolioState(client, request.userId, request.state, request.options);
+      saved = true;
+      setSyncError(null);
+    } catch (error) {
+      queuedCloudSaveRef.current = queuedCloudSaveRef.current ?? request;
+      setSyncError(error instanceof Error ? error.message : "Could not sync your data.");
+    } finally {
+      cloudSaveInFlightRef.current = false;
+      if (saved && queuedCloudSaveRef.current) {
+        window.setTimeout(() => {
+          void flushCloudSaveQueue();
+        }, 0);
+      }
+    }
+  }, [client]);
+
+  const queueCloudSave = useCallback(
+    (request: CloudSaveRequest) => {
+      queuedCloudSaveRef.current = request;
+
+      if (cloudSaveTimerRef.current) {
+        window.clearTimeout(cloudSaveTimerRef.current);
+      }
+
+      cloudSaveTimerRef.current = window.setTimeout(() => {
+        cloudSaveTimerRef.current = null;
+        void flushCloudSaveQueue();
+      }, 350);
+    },
+    [flushCloudSaveQueue],
+  );
 
   useEffect(() => {
     const saved = loadPortfolioState();
@@ -84,6 +196,7 @@ export function usePortfolioApp() {
 
       if (!nextSession) {
         cloudReadyRef.current = false;
+        queuedCloudSaveRef.current = null;
         setShowImportPrompt(false);
         const local = loadPortfolioState();
         if (local) {
@@ -95,9 +208,30 @@ export function usePortfolioApp() {
       }
 
       try {
+        const localBeforeCloudLoad = loadPortfolioState();
+        const localFingerprintBeforeCloudLoad = durableStateFingerprint(localBeforeCloudLoad);
         const remote = await loadCloudPortfolioState(client, nextSession.user.id);
+        const localAfterCloudLoad = loadPortfolioState();
+        const localChangedDuringCloudLoad = durableStateFingerprint(localAfterCloudLoad) !== localFingerprintBeforeCloudLoad;
+
+        if (cloudWritesAllowed && localChangedDuringCloudLoad && localAfterCloudLoad && hasMeaningfulState(localAfterCloudLoad)) {
+          setState(localAfterCloudLoad);
+          pendingImportRef.current = localAfterCloudLoad;
+          setShowImportPrompt(false);
+          cloudReadyRef.current = true;
+          return;
+        }
+
         if (remote) {
           const localMeta = loadPortfolioState();
+          if (cloudWritesAllowed && localMeta && isLocalStateNewer(localMeta, remote.state, remote.updatedAt)) {
+            setState(localMeta);
+            pendingImportRef.current = localMeta;
+            setShowImportPrompt(false);
+            cloudReadyRef.current = true;
+            return;
+          }
+
           setState({
             ...remote.state,
             lastViewedAt: localMeta?.lastViewedAt ?? remote.state.lastViewedAt,
@@ -111,9 +245,9 @@ export function usePortfolioApp() {
           pendingImportRef.current = local;
           if (hasMeaningfulState(local)) {
             setState(local);
-            setShowImportPrompt(true);
+            setShowImportPrompt(cloudWritesAllowed);
             cloudReadyRef.current = false;
-          } else {
+          } else if (cloudWritesAllowed) {
             await saveCloudPortfolioState(client, nextSession.user.id, defaultState, {
               importedLocalData: false,
               setupComplete: true,
@@ -121,6 +255,10 @@ export function usePortfolioApp() {
             setState(defaultState);
             setShowImportPrompt(false);
             cloudReadyRef.current = true;
+          } else {
+            setState(defaultState);
+            setShowImportPrompt(false);
+            cloudReadyRef.current = false;
           }
         }
       } catch (error) {
@@ -143,7 +281,7 @@ export function usePortfolioApp() {
       window.clearTimeout(authReadyTimeout);
       data.subscription.unsubscribe();
     };
-  }, [client]);
+  }, [client, cloudWritesAllowed]);
 
   useEffect(() => {
     if (!hydrated) {
@@ -152,17 +290,28 @@ export function usePortfolioApp() {
 
     savePortfolioState(state);
 
-    if (!client || !session || !cloudReadyRef.current || showImportPrompt) {
+    if (!client || !session || !cloudWritesAllowed || !cloudReadyRef.current || showImportPrompt) {
       return;
     }
 
-    void saveCloudPortfolioState(client, session.user.id, state, {
-      importedLocalData: false,
-      setupComplete: true,
-    }).catch((error) => {
-      setSyncError(error instanceof Error ? error.message : "Could not sync your data.");
+    queueCloudSave({
+      userId: session.user.id,
+      state,
+      options: {
+        importedLocalData: false,
+        setupComplete: true,
+      },
     });
-  }, [client, hydrated, session, showImportPrompt, state]);
+  }, [client, cloudWritesAllowed, hydrated, queueCloudSave, session, showImportPrompt, state]);
+
+  useEffect(
+    () => () => {
+      if (cloudSaveTimerRef.current) {
+        window.clearTimeout(cloudSaveTimerRef.current);
+      }
+    },
+    [],
+  );
 
   const saveHolding = (holding: Holding) => {
     setLastError(null);
@@ -374,6 +523,11 @@ export function usePortfolioApp() {
       return;
     }
 
+    if (!cloudWritesAllowed) {
+      setAuthMessage("Local development is cloud read-only, so test data was not imported to Supabase.");
+      return;
+    }
+
     const source = pendingImportRef.current ?? state;
     await saveCloudPortfolioState(client, session.user.id, source, {
       importedLocalData: true,
@@ -387,6 +541,11 @@ export function usePortfolioApp() {
 
   const startFreshCloud = async () => {
     if (!client || !session) {
+      return;
+    }
+
+    if (!cloudWritesAllowed) {
+      setAuthMessage("Local development is cloud read-only, so your Supabase data was not reset.");
       return;
     }
 
@@ -510,6 +669,7 @@ export function usePortfolioApp() {
     clearDemoMessage,
     markDashboardViewed,
     hasSupabase: hasSupabaseConfig(),
+    cloudWritesAllowed,
     isSignedIn: Boolean(session),
     authReady,
     userEmail: session?.user.email ?? null,
