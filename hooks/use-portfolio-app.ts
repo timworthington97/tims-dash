@@ -29,6 +29,8 @@ type CloudSaveRequest = {
   };
 };
 
+type PortfolioStateUpdater = (current: PortfolioAppState) => PortfolioAppState;
+
 const defaultState: PortfolioAppState = {
   holdings: [],
   prices: {},
@@ -109,6 +111,7 @@ export function usePortfolioApp() {
   const client = useMemo(() => getSupabaseBrowserClient(), []);
   const cloudWritesAllowed = useMemo(() => canWriteCloudFromCurrentOrigin(), []);
   const [state, setState] = useState<PortfolioAppState>(defaultState);
+  const stateRef = useRef<PortfolioAppState>(defaultState);
   const [hydrated, setHydrated] = useState(false);
   const [refreshState, setRefreshState] = useState<"idle" | "loading">("idle");
   const [lastError, setLastError] = useState<string | null>(null);
@@ -125,6 +128,11 @@ export function usePortfolioApp() {
   const queuedCloudSaveRef = useRef<CloudSaveRequest | null>(null);
   const cloudSaveInFlightRef = useRef(false);
   const cloudSaveTimerRef = useRef<number | null>(null);
+
+  const replaceState = useCallback((nextState: PortfolioAppState) => {
+    stateRef.current = nextState;
+    setState(nextState);
+  }, []);
 
   const flushCloudSaveQueue = useCallback(async () => {
     if (!client || cloudSaveInFlightRef.current) {
@@ -158,7 +166,7 @@ export function usePortfolioApp() {
   }, [client]);
 
   const queueCloudSave = useCallback(
-    (request: CloudSaveRequest) => {
+    (request: CloudSaveRequest, delayMs = 350) => {
       queuedCloudSaveRef.current = request;
 
       if (cloudSaveTimerRef.current) {
@@ -168,15 +176,53 @@ export function usePortfolioApp() {
       cloudSaveTimerRef.current = window.setTimeout(() => {
         cloudSaveTimerRef.current = null;
         void flushCloudSaveQueue();
-      }, 350);
+      }, delayMs);
     },
     [flushCloudSaveQueue],
+  );
+
+  const persistStateImmediately = useCallback(
+    (nextState: PortfolioAppState) => {
+      savePortfolioState(nextState);
+
+      if (!client || !session || !cloudWritesAllowed || !cloudReadyRef.current || showImportPrompt) {
+        return;
+      }
+
+      queueCloudSave(
+        {
+          userId: session.user.id,
+          state: nextState,
+          options: {
+            importedLocalData: false,
+            setupComplete: true,
+          },
+        },
+        0,
+      );
+    },
+    [client, cloudWritesAllowed, queueCloudSave, session, showImportPrompt],
+  );
+
+  const commitState = useCallback(
+    (updater: PortfolioStateUpdater) => {
+      const current = stateRef.current;
+      const nextState = updater(current);
+
+      if (nextState === current) {
+        return;
+      }
+
+      replaceState(nextState);
+      persistStateImmediately(nextState);
+    },
+    [persistStateImmediately, replaceState],
   );
 
   useEffect(() => {
     const saved = loadPortfolioState();
     if (saved) {
-      setState(saved);
+      replaceState(saved);
       pendingImportRef.current = saved;
     }
     setHydrated(true);
@@ -200,7 +246,7 @@ export function usePortfolioApp() {
         setShowImportPrompt(false);
         const local = loadPortfolioState();
         if (local) {
-          setState(local);
+          replaceState(local);
           pendingImportRef.current = local;
         }
         setAuthReady(true);
@@ -215,7 +261,7 @@ export function usePortfolioApp() {
         const localChangedDuringCloudLoad = durableStateFingerprint(localAfterCloudLoad) !== localFingerprintBeforeCloudLoad;
 
         if (cloudWritesAllowed && localChangedDuringCloudLoad && localAfterCloudLoad && hasMeaningfulState(localAfterCloudLoad)) {
-          setState(localAfterCloudLoad);
+          replaceState(localAfterCloudLoad);
           pendingImportRef.current = localAfterCloudLoad;
           setShowImportPrompt(false);
           cloudReadyRef.current = true;
@@ -225,14 +271,14 @@ export function usePortfolioApp() {
         if (remote) {
           const localMeta = loadPortfolioState();
           if (cloudWritesAllowed && localMeta && isLocalStateNewer(localMeta, remote.state, remote.updatedAt)) {
-            setState(localMeta);
+            replaceState(localMeta);
             pendingImportRef.current = localMeta;
             setShowImportPrompt(false);
             cloudReadyRef.current = true;
             return;
           }
 
-          setState({
+          replaceState({
             ...remote.state,
             lastViewedAt: localMeta?.lastViewedAt ?? remote.state.lastViewedAt,
             previousViewedAt: localMeta?.previousViewedAt ?? remote.state.previousViewedAt,
@@ -244,7 +290,7 @@ export function usePortfolioApp() {
           const local = loadPortfolioState() ?? defaultState;
           pendingImportRef.current = local;
           if (hasMeaningfulState(local)) {
-            setState(local);
+            replaceState(local);
             setShowImportPrompt(cloudWritesAllowed);
             cloudReadyRef.current = false;
           } else if (cloudWritesAllowed) {
@@ -252,11 +298,11 @@ export function usePortfolioApp() {
               importedLocalData: false,
               setupComplete: true,
             });
-            setState(defaultState);
+            replaceState(defaultState);
             setShowImportPrompt(false);
             cloudReadyRef.current = true;
           } else {
-            setState(defaultState);
+            replaceState(defaultState);
             setShowImportPrompt(false);
             cloudReadyRef.current = false;
           }
@@ -281,7 +327,7 @@ export function usePortfolioApp() {
       window.clearTimeout(authReadyTimeout);
       data.subscription.unsubscribe();
     };
-  }, [client, cloudWritesAllowed]);
+  }, [client, cloudWritesAllowed, replaceState]);
 
   useEffect(() => {
     if (!hydrated) {
@@ -315,7 +361,7 @@ export function usePortfolioApp() {
 
   const saveHolding = (holding: Holding) => {
     setLastError(null);
-    setState((current) => {
+    commitState((current) => {
       const exists = current.holdings.some((item) => item.id === holding.id);
       return {
         ...current,
@@ -328,7 +374,7 @@ export function usePortfolioApp() {
 
   const deleteHolding = (id: string) => {
     setLastError(null);
-    setState((current) => {
+    commitState((current) => {
       const nextPrices = { ...current.prices };
       delete nextPrices[id];
       return {
@@ -340,7 +386,7 @@ export function usePortfolioApp() {
   };
 
   const saveIncome = (entry: IncomeEntry) => {
-    setState((current) => {
+    commitState((current) => {
       const exists = current.incomes.some((item) => item.id === entry.id);
       return {
         ...current,
@@ -350,14 +396,14 @@ export function usePortfolioApp() {
   };
 
   const deleteIncome = (id: string) => {
-    setState((current) => ({
+    commitState((current) => ({
       ...current,
       incomes: current.incomes.filter((entry) => entry.id !== id),
     }));
   };
 
   const saveExpense = (entry: ExpenseEntry) => {
-    setState((current) => {
+    commitState((current) => {
       const exists = current.expenses.some((item) => item.id === entry.id);
       return {
         ...current,
@@ -367,14 +413,14 @@ export function usePortfolioApp() {
   };
 
   const deleteExpense = (id: string) => {
-    setState((current) => ({
+    commitState((current) => ({
       ...current,
       expenses: current.expenses.filter((entry) => entry.id !== id),
     }));
   };
 
   const saveBankHistoryEntry = (entry: BankHistoryEntry) => {
-    setState((current) => {
+    commitState((current) => {
       const exists = current.bankHistory.some((item) => item.id === entry.id);
       return {
         ...current,
@@ -386,14 +432,14 @@ export function usePortfolioApp() {
   };
 
   const deleteBankHistoryEntry = (id: string) => {
-    setState((current) => ({
+    commitState((current) => ({
       ...current,
       bankHistory: current.bankHistory.filter((entry) => entry.id !== id),
     }));
   };
 
   const saveScenario = (entry: Scenario) => {
-    setState((current) => {
+    commitState((current) => {
       const exists = current.scenarios.some((item) => item.id === entry.id);
       return {
         ...current,
@@ -403,21 +449,21 @@ export function usePortfolioApp() {
   };
 
   const deleteScenario = (id: string) => {
-    setState((current) => ({
+    commitState((current) => ({
       ...current,
       scenarios: current.scenarios.filter((entry) => entry.id !== id),
     }));
   };
 
   const deleteSnapshot = (id: string) => {
-    setState((current) => ({
+    commitState((current) => ({
       ...current,
       snapshots: current.snapshots.filter((snapshot) => snapshot.id !== id),
     }));
   };
 
   const clearSnapshots = () => {
-    setState((current) => ({
+    commitState((current) => ({
       ...current,
       snapshots: [],
     }));
@@ -425,18 +471,18 @@ export function usePortfolioApp() {
 
   const loadSampleData = (holdings: readonly Holding[] = SAMPLE_HOLDINGS) => {
     const seeded = holdings.map((holding) => ({ ...holding }));
-    setState({
+    commitState((current) => ({
       holdings: seeded,
       prices: {},
       snapshots: [],
       lastRefreshedAt: null,
-      lastViewedAt: state.lastViewedAt,
-      previousViewedAt: state.previousViewedAt,
+      lastViewedAt: current.lastViewedAt,
+      previousViewedAt: current.previousViewedAt,
       incomes: SAMPLE_INCOMES.map((item) => ({ ...item })),
       expenses: SAMPLE_EXPENSES.map((item) => ({ ...item })),
       bankHistory: SAMPLE_BANK_HISTORY.map((item) => ({ ...item })),
       scenarios: SAMPLE_SCENARIOS.map((item) => ({ ...item })),
-    });
+    }));
     setLastError(null);
     setDemoMessage("Sample portfolio loaded. Press refresh to fetch prices and create your first snapshot.");
   };
@@ -444,7 +490,7 @@ export function usePortfolioApp() {
   const clearDemoMessage = () => setDemoMessage(null);
 
   const markDashboardViewed = useCallback(() => {
-    setState((current) => {
+    commitState((current) => {
       const now = Date.now();
       const currentViewedAt = current.lastViewedAt ? new Date(current.lastViewedAt).getTime() : null;
 
@@ -458,7 +504,7 @@ export function usePortfolioApp() {
         lastViewedAt: new Date(now).toISOString(),
       };
     });
-  }, []);
+  }, [commitState]);
 
   const signInWithPassword = async (email: string, password: string) => {
     if (!client) {
@@ -533,7 +579,7 @@ export function usePortfolioApp() {
       importedLocalData: true,
       setupComplete: true,
     });
-    setState(source);
+    replaceState(source);
     setShowImportPrompt(false);
     cloudReadyRef.current = true;
     setAuthMessage("Local data imported to your private cloud sync.");
@@ -553,7 +599,7 @@ export function usePortfolioApp() {
       importedLocalData: false,
       setupComplete: true,
     });
-    setState(defaultState);
+    replaceState(defaultState);
     setShowImportPrompt(false);
     cloudReadyRef.current = true;
     setAuthMessage("Started with a fresh private cloud profile.");
@@ -611,7 +657,7 @@ export function usePortfolioApp() {
       setRefreshSummary(payload.summary);
       setRefreshInsight(buildRefreshInsight(previousView, insightView, payload.summary, payload.prices ?? []));
 
-      setState((current) => ({
+      commitState((current) => ({
         ...current,
         prices: mergedPrices,
         snapshots: [...current.snapshots, snapshot].slice(-SNAPSHOT_HISTORY_LIMIT),
