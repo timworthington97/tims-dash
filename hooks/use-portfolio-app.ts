@@ -125,6 +125,7 @@ export function usePortfolioApp() {
   const [showImportPrompt, setShowImportPrompt] = useState(false);
   const cloudReadyRef = useRef(false);
   const pendingImportRef = useRef<PortfolioAppState | null>(null);
+  const pendingCloudSyncStateRef = useRef<PortfolioAppState | null>(null);
   const queuedCloudSaveRef = useRef<CloudSaveRequest | null>(null);
   const cloudSaveInFlightRef = useRef(false);
   const cloudSaveTimerRef = useRef<number | null>(null);
@@ -157,10 +158,10 @@ export function usePortfolioApp() {
       setSyncError(error instanceof Error ? error.message : "Could not sync your data.");
     } finally {
       cloudSaveInFlightRef.current = false;
-      if (saved && queuedCloudSaveRef.current) {
+      if (queuedCloudSaveRef.current) {
         window.setTimeout(() => {
           void flushCloudSaveQueue();
-        }, 0);
+        }, saved ? 0 : 1500);
       }
     }
   }, [client]);
@@ -171,6 +172,12 @@ export function usePortfolioApp() {
 
       if (cloudSaveTimerRef.current) {
         window.clearTimeout(cloudSaveTimerRef.current);
+        cloudSaveTimerRef.current = null;
+      }
+
+      if (delayMs <= 0) {
+        void flushCloudSaveQueue();
+        return;
       }
 
       cloudSaveTimerRef.current = window.setTimeout(() => {
@@ -185,10 +192,16 @@ export function usePortfolioApp() {
     (nextState: PortfolioAppState) => {
       savePortfolioState(nextState);
 
-      if (!client || !session || !cloudWritesAllowed || !cloudReadyRef.current || showImportPrompt) {
+      if (!client || !session || !cloudWritesAllowed || showImportPrompt) {
         return;
       }
 
+      if (!cloudReadyRef.current) {
+        pendingCloudSyncStateRef.current = nextState;
+        return;
+      }
+
+      pendingCloudSyncStateRef.current = null;
       queueCloudSave(
         {
           userId: session.user.id,
@@ -202,6 +215,33 @@ export function usePortfolioApp() {
       );
     },
     [client, cloudWritesAllowed, queueCloudSave, session, showImportPrompt],
+  );
+
+  const flushPendingCloudSync = useCallback(
+    (userId: string) => {
+      if (!cloudWritesAllowed || showImportPrompt) {
+        return;
+      }
+
+      const pendingState = pendingCloudSyncStateRef.current;
+      if (!pendingState) {
+        return;
+      }
+
+      pendingCloudSyncStateRef.current = null;
+      queueCloudSave(
+        {
+          userId,
+          state: pendingState,
+          options: {
+            importedLocalData: false,
+            setupComplete: true,
+          },
+        },
+        0,
+      );
+    },
+    [cloudWritesAllowed, queueCloudSave, showImportPrompt],
   );
 
   const commitState = useCallback(
@@ -243,6 +283,7 @@ export function usePortfolioApp() {
       if (!nextSession) {
         cloudReadyRef.current = false;
         queuedCloudSaveRef.current = null;
+        pendingCloudSyncStateRef.current = null;
         setShowImportPrompt(false);
         const local = loadPortfolioState();
         if (local) {
@@ -265,6 +306,18 @@ export function usePortfolioApp() {
           pendingImportRef.current = localAfterCloudLoad;
           setShowImportPrompt(false);
           cloudReadyRef.current = true;
+          flushPendingCloudSync(nextSession.user.id);
+          queueCloudSave(
+            {
+              userId: nextSession.user.id,
+              state: localAfterCloudLoad,
+              options: {
+                importedLocalData: false,
+                setupComplete: true,
+              },
+            },
+            0,
+          );
           return;
         }
 
@@ -275,6 +328,18 @@ export function usePortfolioApp() {
             pendingImportRef.current = localMeta;
             setShowImportPrompt(false);
             cloudReadyRef.current = true;
+            flushPendingCloudSync(nextSession.user.id);
+            queueCloudSave(
+              {
+                userId: nextSession.user.id,
+                state: localMeta,
+                options: {
+                  importedLocalData: false,
+                  setupComplete: true,
+                },
+              },
+              0,
+            );
             return;
           }
 
@@ -286,6 +351,7 @@ export function usePortfolioApp() {
           pendingImportRef.current = remote.state;
           setShowImportPrompt(false);
           cloudReadyRef.current = true;
+          flushPendingCloudSync(nextSession.user.id);
         } else {
           const local = loadPortfolioState() ?? defaultState;
           pendingImportRef.current = local;
@@ -301,6 +367,7 @@ export function usePortfolioApp() {
             replaceState(defaultState);
             setShowImportPrompt(false);
             cloudReadyRef.current = true;
+            flushPendingCloudSync(nextSession.user.id);
           } else {
             replaceState(defaultState);
             setShowImportPrompt(false);
@@ -327,7 +394,7 @@ export function usePortfolioApp() {
       window.clearTimeout(authReadyTimeout);
       data.subscription.unsubscribe();
     };
-  }, [client, cloudWritesAllowed, replaceState]);
+  }, [client, cloudWritesAllowed, flushPendingCloudSync, queueCloudSave, replaceState]);
 
   useEffect(() => {
     if (!hydrated) {
