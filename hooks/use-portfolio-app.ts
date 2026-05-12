@@ -77,22 +77,19 @@ function isLocalStateNewer(local: PortfolioAppState | null, remote: PortfolioApp
     return false;
   }
 
-  const localMetaUpdatedAt = new Date(loadPortfolioStateMeta().updatedAt ?? "").getTime();
+  const localMetaDataUpdatedAt = new Date(loadPortfolioStateMeta().dataUpdatedAt ?? "").getTime();
   const remoteSavedAtTime = new Date(remoteSavedAt ?? "").getTime();
   const localDataUpdatedAt = getPortfolioDataUpdatedAt(local);
   const remoteDataUpdatedAt = getPortfolioDataUpdatedAt(remote);
+  const localEditUpdatedAt = Math.max(localDataUpdatedAt, Number.isFinite(localMetaDataUpdatedAt) ? localMetaDataUpdatedAt : 0);
+  const remoteEditUpdatedAt = Math.max(remoteDataUpdatedAt, Number.isFinite(remoteSavedAtTime) ? remoteSavedAtTime : 0);
   const skewMs = 1000;
 
-  if (localDataUpdatedAt && localDataUpdatedAt > remoteDataUpdatedAt + skewMs) {
+  if (localEditUpdatedAt && localEditUpdatedAt > remoteEditUpdatedAt + skewMs) {
     return true;
   }
 
-  return Boolean(
-    Number.isFinite(localMetaUpdatedAt) &&
-      Number.isFinite(remoteSavedAtTime) &&
-      localMetaUpdatedAt > remoteSavedAtTime + skewMs &&
-      durableStateFingerprint(local) !== durableStateFingerprint(remote),
-  );
+  return false;
 }
 
 function canWriteCloudFromCurrentOrigin() {
@@ -190,7 +187,8 @@ export function usePortfolioApp() {
 
   const persistStateImmediately = useCallback(
     (nextState: PortfolioAppState) => {
-      savePortfolioState(nextState);
+      const savedAt = new Date().toISOString();
+      savePortfolioState(nextState, { updatedAt: savedAt, dataUpdatedAt: savedAt });
 
       if (!client || !session || !cloudWritesAllowed || showImportPrompt) {
         return;
@@ -343,11 +341,13 @@ export function usePortfolioApp() {
             return;
           }
 
-          replaceState({
+          const nextRemoteState = {
             ...remote.state,
             lastViewedAt: localMeta?.lastViewedAt ?? remote.state.lastViewedAt,
             previousViewedAt: localMeta?.previousViewedAt ?? remote.state.previousViewedAt,
-          });
+          };
+          savePortfolioState(nextRemoteState, { updatedAt: remote.updatedAt ?? new Date().toISOString(), dataUpdatedAt: null });
+          replaceState(nextRemoteState);
           pendingImportRef.current = remote.state;
           setShowImportPrompt(false);
           cloudReadyRef.current = true;
@@ -557,21 +557,23 @@ export function usePortfolioApp() {
   const clearDemoMessage = () => setDemoMessage(null);
 
   const markDashboardViewed = useCallback(() => {
-    commitState((current) => {
-      const now = Date.now();
-      const currentViewedAt = current.lastViewedAt ? new Date(current.lastViewedAt).getTime() : null;
+    const current = stateRef.current;
+    const now = Date.now();
+    const currentViewedAt = current.lastViewedAt ? new Date(current.lastViewedAt).getTime() : null;
 
-      if (currentViewedAt && Number.isFinite(currentViewedAt) && now - currentViewedAt < 5 * 60 * 1000) {
-        return current;
-      }
+    if (currentViewedAt && Number.isFinite(currentViewedAt) && now - currentViewedAt < 5 * 60 * 1000) {
+      return;
+    }
 
-      return {
-        ...current,
-        previousViewedAt: current.lastViewedAt ?? current.previousViewedAt,
-        lastViewedAt: new Date(now).toISOString(),
-      };
-    });
-  }, [commitState]);
+    const nextState = {
+      ...current,
+      previousViewedAt: current.lastViewedAt ?? current.previousViewedAt,
+      lastViewedAt: new Date(now).toISOString(),
+    };
+
+    replaceState(nextState);
+    savePortfolioState(nextState);
+  }, [replaceState]);
 
   const signInWithPassword = async (email: string, password: string) => {
     if (!client) {

@@ -5,6 +5,7 @@ const STORAGE_META_KEY = `${STORAGE_KEY}:meta`;
 
 export interface PortfolioStateMeta {
   updatedAt: string | null;
+  dataUpdatedAt: string | null;
 }
 
 function normalizeBankHistoryEntry(entry: BankHistoryEntry): BankHistoryEntry {
@@ -81,21 +82,22 @@ export function loadPortfolioState(): PortfolioAppState | null {
 
 export function loadPortfolioStateMeta(): PortfolioStateMeta {
   if (typeof window === "undefined") {
-    return { updatedAt: null };
+    return { updatedAt: null, dataUpdatedAt: null };
   }
 
   try {
     const raw = window.localStorage.getItem(STORAGE_META_KEY);
     if (!raw) {
-      return { updatedAt: null };
+      return { updatedAt: null, dataUpdatedAt: null };
     }
 
     const parsed = JSON.parse(raw) as PortfolioStateMeta;
     return {
       updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : null,
+      dataUpdatedAt: typeof parsed.dataUpdatedAt === "string" ? parsed.dataUpdatedAt : null,
     };
   } catch {
-    return { updatedAt: null };
+    return { updatedAt: null, dataUpdatedAt: null };
   }
 }
 
@@ -104,11 +106,14 @@ export function savePortfolioState(state: PortfolioAppState, meta?: PortfolioSta
     return;
   }
 
+  const existingMeta = loadPortfolioStateMeta();
+
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   window.localStorage.setItem(
     STORAGE_META_KEY,
     JSON.stringify({
-      updatedAt: meta?.updatedAt ?? new Date().toISOString(),
+      updatedAt: meta?.updatedAt ?? existingMeta.updatedAt ?? new Date().toISOString(),
+      dataUpdatedAt: meta?.dataUpdatedAt ?? existingMeta.dataUpdatedAt,
     } satisfies PortfolioStateMeta),
   );
 }
