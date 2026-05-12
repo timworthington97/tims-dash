@@ -29,6 +29,7 @@ import { CashflowForm } from "@/components/cashflow-form";
 import { HoldingForm } from "@/components/holding-form";
 import { ProjectionChart } from "@/components/projection-chart";
 import { TrendChart } from "@/components/trend-chart";
+import { buildHoldingPerformance, type HoldingGroupPerformance, type HoldingPerformanceRange } from "@/lib/holding-performance";
 import { parseUbankPdfText } from "@/lib/importers/ubank-pdf";
 import { parseUbankCsv } from "@/lib/importers/ubank";
 import { buildDashboardInsights } from "@/lib/insights";
@@ -108,6 +109,15 @@ const bankRangeOptions: { id: BankTrendRange; label: string }[] = [
   { id: "3m", label: "3m" },
   { id: "6m", label: "6m" },
   { id: "12m", label: "12m" },
+  { id: "all", label: "All" },
+];
+
+const holdingPerformanceRanges: { id: HoldingPerformanceRange; label: string }[] = [
+  { id: "1m", label: "1M" },
+  { id: "2m", label: "2M" },
+  { id: "3m", label: "3M" },
+  { id: "6m", label: "6M" },
+  { id: "1y", label: "1Y" },
   { id: "all", label: "All" },
 ];
 
@@ -221,6 +231,14 @@ function buildPeriodMovement(snapshots: PortfolioSnapshot[], currentLiquid: numb
     direction: amount > 0 ? ("up" as const) : amount < 0 ? ("down" as const) : ("flat" as const),
     baselineLabel: approximate ? `from oldest saved snapshot (${formatRelativeTime(comparisonSnapshot.timestamp)})` : formatRelativeTime(comparisonSnapshot.timestamp),
   };
+}
+
+function formatSignedPercent(value: number | null) {
+  if (value === null) {
+    return "Not enough history";
+  }
+
+  return `${value >= 0 ? "+" : "-"}${formatPercent(Math.abs(value))}`;
 }
 
 function describeRefreshDelta(label: string, deltaAud: number) {
@@ -347,6 +365,7 @@ export default function HomePage() {
   const [forwardMode, setForwardMode] = useState<BankProjectionMode>("liquid");
   const [projectionMode, setProjectionMode] = useState<BankProjectionMode>("liquid");
   const [bankTrendRange, setBankTrendRange] = useState<BankTrendRange>("6m");
+  const [holdingPerformanceRange, setHoldingPerformanceRange] = useState<HoldingPerformanceRange>("3m");
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
@@ -626,6 +645,10 @@ export default function HomePage() {
 
   const view = useMemo(() => calculatePortfolioView(holdings, prices, snapshots), [holdings, prices, snapshots]);
   const grouped = useMemo(() => buildHoldingGroups(view.holdings, filter), [filter, view.holdings]);
+  const holdingPerformance = useMemo(
+    () => buildHoldingPerformance(view, snapshots, holdingPerformanceRange, currentTime),
+    [currentTime, holdingPerformanceRange, snapshots, view],
+  );
   const liquidMovements = useMemo(
     () => [
       buildPeriodMovement(snapshots, view.totals.liquid, currentTime, 24, "24h"),
@@ -1291,6 +1314,32 @@ export default function HomePage() {
                 </div>
               ) : (
                 <>
+                  <div className="performance-section">
+                    <div className="section-head compact">
+                      <div>
+                        <p className="eyebrow">Performance</p>
+                        <h3>Are your market holdings up or down?</h3>
+                      </div>
+                      <div className="segmented-control compact-toggle" aria-label="Holding performance period">
+                        {holdingPerformanceRanges.map((range) => (
+                          <button
+                            key={range.id}
+                            className={clsx(holdingPerformanceRange === range.id && "active")}
+                            onClick={() => setHoldingPerformanceRange(range.id)}
+                            type="button"
+                          >
+                            {range.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="performance-grid">
+                      {holdingPerformance.map((performance) => (
+                        <HoldingPerformanceCard key={performance.type} performance={performance} />
+                      ))}
+                    </div>
+                  </div>
+
                   <div className="allocation-card inset-surface">
                     <div className="section-head compact">
                       <div>
@@ -2528,6 +2577,85 @@ function MetricCard({
     <article className={clsx("metric-card", tone)}>
       <span>{label}</span>
       <strong>{value}</strong>
+    </article>
+  );
+}
+
+function HoldingPerformanceCard({ performance }: { performance: HoldingGroupPerformance }) {
+  const isOverallPositive = (performance.overallGainAud ?? 0) >= 0;
+  const isPeriodPositive = (performance.periodChangeAud ?? 0) >= 0;
+  const overallTone =
+    performance.overallGainAud === null ? "neutral" : isOverallPositive ? "positive" : "negative";
+  const periodTone =
+    performance.periodChangeAud === null ? "neutral" : isPeriodPositive ? "positive" : "negative";
+  const statusTone = performance.overallGainAud === null ? "warning" : isOverallPositive ? "ok" : "danger";
+
+  return (
+    <article className={clsx("performance-card", performance.type)}>
+      <div className="performance-card-head">
+        <div>
+          <p className="eyebrow">{performance.type === "etf" ? "ETFs" : "Crypto"}</p>
+          <h3>{performance.label}</h3>
+        </div>
+        <span className={clsx("status-pill", statusTone)}>
+          {performance.overallGainAud === null ? "Add invested amount" : isOverallPositive ? "Up overall" : "Down overall"}
+        </span>
+      </div>
+
+      <div className="performance-primary">
+        <span>Current value</span>
+        <strong>{formatAud(performance.currentValueAud)}</strong>
+      </div>
+
+      <div className="performance-stats">
+        <div>
+          <span>Total invested</span>
+          <strong>{performance.costBasisAud === null ? "Not added yet" : formatAud(performance.costBasisAud)}</strong>
+        </div>
+        <div className={overallTone}>
+          <span>Overall gain/loss</span>
+          <strong>
+            {performance.overallGainAud === null
+              ? "Add cost basis"
+              : `${formatSignedAud(performance.overallGainAud)} (${formatSignedPercent(performance.overallGainPercent)})`}
+          </strong>
+        </div>
+        <div className={periodTone}>
+          <span>{performance.periodSource === "purchaseLots" ? `${performance.periodLabel} buys` : performance.periodLabel}</span>
+          <strong>
+            {performance.periodChangeAud === null
+              ? performance.periodSource === "purchaseLots"
+                ? "No buys in this range"
+                : "Not enough history"
+              : `${formatSignedAud(performance.periodChangeAud)} (${formatSignedPercent(performance.periodChangePercent)})`}
+          </strong>
+        </div>
+      </div>
+
+      <div className="performance-movers">
+        <div>
+          <span>Best performer</span>
+          <strong>
+            {performance.bestPerformer
+              ? `${performance.bestPerformer.name} ${formatSignedAud(performance.bestPerformer.deltaAud)}`
+              : performance.periodSource === "purchaseLots"
+                ? "No buys in this range"
+                : "Available after newer snapshots"}
+          </strong>
+        </div>
+        <div>
+          <span>Worst performer</span>
+          <strong>
+            {performance.worstPerformer
+              ? `${performance.worstPerformer.name} ${formatSignedAud(performance.worstPerformer.deltaAud)}`
+              : performance.periodSource === "purchaseLots"
+                ? "No buys in this range"
+                : "Available after newer snapshots"}
+          </strong>
+        </div>
+      </div>
+
+      <p className="performance-note">{performance.note}</p>
     </article>
   );
 }

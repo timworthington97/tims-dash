@@ -777,6 +777,101 @@ button {
   padding: 16px;
 }
 
+.performance-section {
+  padding: 18px;
+  border-radius: 28px;
+  background: var(--inset-gradient);
+  border: 1px solid var(--button-secondary-border);
+  box-shadow: var(--shadow-soft);
+}
+
+.performance-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.performance-card {
+  min-width: 0;
+  padding: 18px;
+  border-radius: 26px;
+  background: var(--card-gradient);
+  border: 1px solid var(--button-secondary-border);
+  box-shadow: var(--shadow-soft);
+}
+
+.performance-card-head,
+.performance-primary,
+.performance-stats,
+.performance-movers {
+  display: grid;
+  gap: 12px;
+}
+
+.performance-card-head {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.performance-card-head h3,
+.performance-primary strong,
+.performance-stats strong,
+.performance-movers strong {
+  overflow-wrap: anywhere;
+}
+
+.performance-primary {
+  margin: 18px 0;
+}
+
+.performance-primary span,
+.performance-stats span,
+.performance-movers span,
+.performance-note {
+  color: var(--text-soft);
+}
+
+.performance-primary strong {
+  font-size: clamp(1.6rem, 4vw, 2.35rem);
+  letter-spacing: -0.05em;
+}
+
+.performance-stats,
+.performance-movers {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.performance-movers {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--button-secondary-border);
+}
+
+.performance-stats > div,
+.performance-movers > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.performance-stats .positive strong,
+.performance-movers .positive strong {
+  color: var(--accent);
+}
+
+.performance-stats .negative strong,
+.performance-movers .negative strong {
+  color: var(--danger);
+}
+
+.performance-note {
+  margin: 14px 0 0;
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
 .allocation-bar {
   display: flex;
   height: 12px;
@@ -1295,7 +1390,8 @@ button {
   margin-top: 16px;
 }
 
-.form-grid label {
+.form-grid label,
+.form-grid .form-field {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1304,6 +1400,67 @@ button {
 .form-grid span {
   color: var(--text-soft);
   font-size: 0.9rem;
+}
+
+.form-grid small {
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.purchase-lot-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.purchase-lot-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.purchase-lot-row {
+  display: grid;
+  grid-template-columns: 1.05fr 1fr 1fr auto;
+  gap: 10px;
+  align-items: end;
+  padding: 12px;
+  border-radius: 22px;
+  background: var(--inset-gradient);
+  border: 1px solid var(--button-secondary-border);
+  box-shadow: var(--shadow-soft);
+}
+
+.purchase-lot-row label {
+  gap: 6px;
+}
+
+.purchase-lot-row input {
+  min-height: 42px;
+  border-radius: 16px;
+  padding: 10px 12px;
+}
+
+.purchase-lot-remove {
+  width: 42px;
+  height: 42px;
+  min-height: 42px;
+  padding: 0;
+  justify-content: center;
+}
+
+.purchase-lot-add {
+  align-self: flex-start;
+}
+
+.purchase-lot-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px;
+  border-radius: 20px;
+  background: var(--inset-gradient);
+  border: 1px dashed var(--button-secondary-border);
 }
 
 .form-grid input,
@@ -2453,6 +2610,7 @@ button {
 
   .hero-side-grid,
   .dashboard-grid,
+  .performance-grid,
   .salary-planner-grid,
   .nomad-planner-grid,
   .salary-savings-grid,
@@ -2464,6 +2622,20 @@ button {
 
   .salary-form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .performance-card-head,
+  .performance-stats,
+  .performance-movers {
+    grid-template-columns: 1fr;
+  }
+
+  .purchase-lot-row {
+    grid-template-columns: 1fr;
+  }
+
+  .purchase-lot-remove {
+    width: 100%;
   }
 
   .city-rent-table-head {
@@ -2565,6 +2737,7 @@ button {
 .metric-card,
 .summary-card,
 .holding-card,
+.performance-card,
 .import-result-row,
 .history-group,
 .entry-row,
@@ -2572,6 +2745,7 @@ button {
 .status-row,
 .projection-chart-card,
 .allocation-card,
+.performance-section,
 .delta-card,
 .workspace-intro-pill,
 .side-sync-card {

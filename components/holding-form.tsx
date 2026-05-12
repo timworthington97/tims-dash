@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import clsx from "clsx";
-import { X } from "lucide-react";
+import { Plus, Trash2, X } from "lucide-react";
 import { EMPTY_FORM_VALUES } from "@/lib/constants";
 import { buildHoldingFromDraft, validateHoldingDraft } from "@/lib/portfolio";
 import type { Holding, HoldingDraft, HoldingType } from "@/lib/types";
@@ -15,6 +15,39 @@ const tabs: { label: string; value: HoldingType }[] = [
   { label: "Asset", value: "manualAsset" },
 ];
 
+interface PurchaseLotRow {
+  id: string;
+  date: string;
+  quantity: string;
+  costAud: string;
+}
+
+function rowId() {
+  return `purchase-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function parsePurchaseRows(value: string): PurchaseLotRow[] {
+  return value
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [date = "", quantity = "", costAud = ""] = line.split(/[,|]/).map((part) => part.trim());
+      return { id: rowId(), date, quantity, costAud };
+    });
+}
+
+function serializePurchaseRows(rows: PurchaseLotRow[]) {
+  return rows
+    .filter((row) => row.date || row.quantity || row.costAud)
+    .map((row) => `${row.date}, ${row.quantity}, ${row.costAud}`)
+    .join("\n");
+}
+
+function todayInputValue() {
+  return new Date().toISOString().slice(0, 10);
+}
+
 export function HoldingForm({
   initialDraft,
   onClose,
@@ -25,9 +58,14 @@ export function HoldingForm({
   onSave: (holding: Holding) => void;
 }) {
   const [draft, setDraft] = useState<HoldingDraft>(initialDraft);
+  const [purchaseRows, setPurchaseRows] = useState<PurchaseLotRow[]>(() => parsePurchaseRows(initialDraft.purchaseLotsText));
   const [errors, setErrors] = useState<string[]>([]);
 
   const update = (patch: Partial<HoldingDraft>) => setDraft((current) => ({ ...current, ...patch }));
+  const updatePurchaseRows = (rows: PurchaseLotRow[]) => {
+    setPurchaseRows(rows);
+    update({ purchaseLotsText: serializePurchaseRows(rows) });
+  };
 
   const handleTypeChange = (type: HoldingType) => {
     setDraft((current) => ({
@@ -37,7 +75,20 @@ export function HoldingForm({
       name: current.name,
       notes: current.notes,
     }));
+    setPurchaseRows([]);
     setErrors([]);
+  };
+
+  const addPurchaseRow = () => {
+    updatePurchaseRows([...purchaseRows, { id: rowId(), date: todayInputValue(), quantity: "", costAud: "" }]);
+  };
+
+  const updatePurchaseRow = (id: string, patch: Partial<PurchaseLotRow>) => {
+    updatePurchaseRows(purchaseRows.map((row) => (row.id === id ? { ...row, ...patch } : row)));
+  };
+
+  const removePurchaseRow = (id: string) => {
+    updatePurchaseRows(purchaseRows.filter((row) => row.id !== id));
   };
 
   const submit = () => {
@@ -145,6 +196,27 @@ export function HoldingForm({
                   placeholder="ASX"
                 />
               </label>
+              <label>
+                <span>Total invested</span>
+                <input
+                  inputMode="decimal"
+                  value={draft.costBasisAud}
+                  onChange={(event) => update({ costBasisAud: event.target.value })}
+                  placeholder="2500"
+                />
+              </label>
+              <div className="form-field full-span">
+                <span>Purchase history</span>
+                <PurchaseLotEditor
+                  rows={purchaseRows}
+                  quantityLabel="Units bought"
+                  quantityPlaceholder="24"
+                  onAdd={addPurchaseRow}
+                  onRemove={removePurchaseRow}
+                  onUpdate={updatePurchaseRow}
+                />
+                <small>Optional. Add dated buys so Tim&apos;s Dash can calculate gain/loss by period.</small>
+              </div>
             </>
           ) : null}
 
@@ -167,6 +239,27 @@ export function HoldingForm({
                   placeholder="0.425"
                 />
               </label>
+              <label>
+                <span>Total invested</span>
+                <input
+                  inputMode="decimal"
+                  value={draft.costBasisAud}
+                  onChange={(event) => update({ costBasisAud: event.target.value })}
+                  placeholder="5000"
+                />
+              </label>
+              <div className="form-field full-span">
+                <span>Purchase history</span>
+                <PurchaseLotEditor
+                  rows={purchaseRows}
+                  quantityLabel="Amount bought"
+                  quantityPlaceholder="0.02"
+                  onAdd={addPurchaseRow}
+                  onRemove={removePurchaseRow}
+                  onUpdate={updatePurchaseRow}
+                />
+                <small>Optional. Add dated buys so Tim&apos;s Dash can calculate gain/loss by period.</small>
+              </div>
             </>
           ) : null}
 
@@ -198,6 +291,81 @@ export function HoldingForm({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function PurchaseLotEditor({
+  rows,
+  quantityLabel,
+  quantityPlaceholder,
+  onAdd,
+  onRemove,
+  onUpdate,
+}: {
+  rows: PurchaseLotRow[];
+  quantityLabel: string;
+  quantityPlaceholder: string;
+  onAdd: () => void;
+  onRemove: (id: string) => void;
+  onUpdate: (id: string, patch: Partial<PurchaseLotRow>) => void;
+}) {
+  return (
+    <div className="purchase-lot-editor">
+      {rows.length ? (
+        <div className="purchase-lot-list">
+          {rows.map((row, index) => (
+            <div key={row.id} className="purchase-lot-row">
+              <label>
+                <span>Purchase date</span>
+                <input
+                  type="date"
+                  value={row.date}
+                  onChange={(event) => onUpdate(row.id, { date: event.target.value })}
+                  aria-label={`Purchase ${index + 1} date`}
+                />
+              </label>
+              <label>
+                <span>{quantityLabel}</span>
+                <input
+                  inputMode="decimal"
+                  value={row.quantity}
+                  onChange={(event) => onUpdate(row.id, { quantity: event.target.value })}
+                  placeholder={quantityPlaceholder}
+                  aria-label={`Purchase ${index + 1} quantity`}
+                />
+              </label>
+              <label>
+                <span>Total paid AUD</span>
+                <input
+                  inputMode="decimal"
+                  value={row.costAud}
+                  onChange={(event) => onUpdate(row.id, { costAud: event.target.value })}
+                  placeholder="500"
+                  aria-label={`Purchase ${index + 1} total paid`}
+                />
+              </label>
+              <button
+                className="ghost-button danger purchase-lot-remove"
+                onClick={() => onRemove(row.id)}
+                type="button"
+                aria-label={`Remove purchase ${index + 1}`}
+              >
+                <Trash2 size={15} />
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="purchase-lot-empty">
+          <span>No purchases added yet.</span>
+          <small>You can still use Total invested, or add dated buys for better period insights.</small>
+        </div>
+      )}
+      <button className="secondary-button purchase-lot-add" onClick={onAdd} type="button">
+        <Plus size={16} />
+        Add purchase
+      </button>
     </div>
   );
 }

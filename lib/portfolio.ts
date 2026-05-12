@@ -49,6 +49,36 @@ function parseNumber(value: string) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function parseMoneyLikeNumber(value: string) {
+  return parseNumber(value.replace(/[$,\s]/g, ""));
+}
+
+function parsePurchaseLotsText(value: string) {
+  return value
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line, index) => {
+      const [date = "", quantity = "", costAud = ""] = line.split(/[,|]/).map((part) => part.trim());
+      return {
+        id: randomId(`lot-${index + 1}`),
+        date,
+        quantity: parseMoneyLikeNumber(quantity),
+        costAud: parseMoneyLikeNumber(costAud),
+      };
+    });
+}
+
+function formatPurchaseLotsText(holding: Holding) {
+  if (holding.type !== "etf" && holding.type !== "crypto") {
+    return "";
+  }
+
+  return (holding.purchaseLots ?? [])
+    .map((lot) => `${lot.date}, ${lot.quantity}, ${lot.costAud}`)
+    .join("\n");
+}
+
 function monthLabel(offset: number) {
   const date = new Date();
   date.setMonth(date.getMonth() + offset);
@@ -77,6 +107,7 @@ function normalizeBankAccountId(value: string | undefined) {
 
 export function validateHoldingDraft(draft: HoldingDraft) {
   const errors: string[] = [];
+  const purchaseLots = draft.purchaseLotsText.trim() ? parsePurchaseLotsText(draft.purchaseLotsText) : [];
 
   if (!draft.name.trim()) {
     errors.push("Name is required.");
@@ -100,6 +131,10 @@ export function validateHoldingDraft(draft: HoldingDraft) {
     if (parseNumber(draft.units) <= 0) {
       errors.push("Units must be greater than zero.");
     }
+
+    if (draft.costBasisAud.trim() && parseNumber(draft.costBasisAud) < 0) {
+      errors.push("Total invested must be zero or more.");
+    }
   }
 
   if (draft.type === "crypto") {
@@ -110,6 +145,25 @@ export function validateHoldingDraft(draft: HoldingDraft) {
     if (parseNumber(draft.cryptoAmount) <= 0) {
       errors.push("Crypto amount must be greater than zero.");
     }
+
+    if (draft.costBasisAud.trim() && parseNumber(draft.costBasisAud) < 0) {
+      errors.push("Total invested must be zero or more.");
+    }
+  }
+
+  if ((draft.type === "etf" || draft.type === "crypto") && purchaseLots.length) {
+    purchaseLots.forEach((lot, index) => {
+      const lineLabel = `Purchase line ${index + 1}`;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(lot.date) || Number.isNaN(new Date(`${lot.date}T00:00:00`).getTime())) {
+        errors.push(`${lineLabel} needs a date like 2026-03-15.`);
+      }
+      if (lot.quantity <= 0) {
+        errors.push(`${lineLabel} needs units or amount greater than zero.`);
+      }
+      if (lot.costAud <= 0) {
+        errors.push(`${lineLabel} needs total paid greater than zero.`);
+      }
+    });
   }
 
   return errors;
@@ -117,6 +171,10 @@ export function validateHoldingDraft(draft: HoldingDraft) {
 
 export function buildHoldingFromDraft(draft: HoldingDraft): Holding {
   const timestamp = nowIso();
+  const purchaseLots = draft.purchaseLotsText.trim() ? parsePurchaseLotsText(draft.purchaseLotsText) : undefined;
+  const lotCostBasis = purchaseLots?.reduce((sum, lot) => sum + lot.costAud, 0);
+  const manualCostBasis = draft.costBasisAud.trim() ? parseNumber(draft.costBasisAud) : undefined;
+  const costBasisAud = lotCostBasis && lotCostBasis > 0 ? lotCostBasis : manualCostBasis;
   const shared = {
     id: draft.id ?? randomId(draft.type),
     type: draft.type,
@@ -140,6 +198,8 @@ export function buildHoldingFromDraft(draft: HoldingDraft): Holding {
         ticker: draft.ticker.trim().toUpperCase(),
         units: parseNumber(draft.units),
         market: draft.market.trim().toUpperCase(),
+        costBasisAud,
+        purchaseLots,
       };
     case "crypto":
       return {
@@ -147,6 +207,8 @@ export function buildHoldingFromDraft(draft: HoldingDraft): Holding {
         type: "crypto",
         symbol: draft.symbol.trim(),
         amount: parseNumber(draft.cryptoAmount),
+        costBasisAud,
+        purchaseLots,
       };
   }
 }
@@ -168,6 +230,8 @@ export function makeHoldingDraftFromExisting(holding: Holding): HoldingDraft {
         symbol: "",
         cryptoAmount: "",
         assetValueAud: "",
+        costBasisAud: "",
+        purchaseLotsText: "",
       };
     case "manualAsset":
       return {
@@ -183,6 +247,8 @@ export function makeHoldingDraftFromExisting(holding: Holding): HoldingDraft {
         symbol: "",
         cryptoAmount: "",
         assetValueAud: String(holding.valueAud),
+        costBasisAud: "",
+        purchaseLotsText: "",
       };
     case "etf":
       return {
@@ -198,6 +264,8 @@ export function makeHoldingDraftFromExisting(holding: Holding): HoldingDraft {
         symbol: "",
         cryptoAmount: "",
         assetValueAud: "",
+        costBasisAud: holding.costBasisAud === undefined ? "" : String(holding.costBasisAud),
+        purchaseLotsText: formatPurchaseLotsText(holding),
       };
     case "crypto":
       return {
@@ -213,6 +281,8 @@ export function makeHoldingDraftFromExisting(holding: Holding): HoldingDraft {
         symbol: holding.symbol,
         cryptoAmount: String(holding.amount),
         assetValueAud: "",
+        costBasisAud: holding.costBasisAud === undefined ? "" : String(holding.costBasisAud),
+        purchaseLotsText: formatPurchaseLotsText(holding),
       };
   }
 }
@@ -368,6 +438,11 @@ export function createSnapshot(holdings: ValuedHolding[], timestamp: string): Po
     totalDebtValue,
     status: failedHoldings ? "partial" : "success",
     failedHoldings,
+    holdings: holdings.map((holding) => ({
+      holdingId: holding.id,
+      type: holding.type,
+      valueAud: holding.valueAud,
+    })),
   };
 }
 

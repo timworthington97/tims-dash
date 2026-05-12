@@ -8,6 +8,13 @@ interface BaseHolding {
   updatedAt: string;
 }
 
+export interface HoldingPurchaseLot {
+  id: string;
+  date: string;
+  quantity: number;
+  costAud: number;
+}
+
 export interface CashHolding extends BaseHolding {
   type: "cash";
   amountAud: number;
@@ -18,12 +25,16 @@ export interface EtfHolding extends BaseHolding {
   ticker: string;
   units: number;
   market?: string;
+  costBasisAud?: number;
+  purchaseLots?: HoldingPurchaseLot[];
 }
 
 export interface CryptoHolding extends BaseHolding {
   type: "crypto";
   symbol: string;
   amount: number;
+  costBasisAud?: number;
+  purchaseLots?: HoldingPurchaseLot[];
 }
 
 export interface DebtHolding extends BaseHolding {
@@ -51,6 +62,8 @@ export interface HoldingDraft {
   symbol: string;
   cryptoAmount: string;
   assetValueAud: string;
+  costBasisAud: string;
+  purchaseLotsText: string;
 }
 
 export type IncomeFrequency = "monthly" | "fortnightly" | "weekly" | "yearly" | "oneOff";
@@ -206,6 +219,13 @@ export interface PortfolioSnapshot {
   totalDebtValue: number;
   status: "success" | "partial";
   failedHoldings: number;
+  holdings?: PortfolioSnapshotHolding[];
+}
+
+export interface PortfolioSnapshotHolding {
+  holdingId: string;
+  type: HoldingType;
+  valueAud: number;
 }
 
 export interface ValuedHolding {
