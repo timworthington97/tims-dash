@@ -56,7 +56,7 @@ export function HoldingForm({
         <div className="section-head">
           <div>
             <p className="eyebrow">{draft.id ? "Edit holding" : "Add holding"}</p>
-            <h2>{draft.id ? "Update portfolio item" : "Create a new portfolio item"}</h2>
+            <h2>{draft.id ? "Update this holding" : "Add something you own or owe"}</h2>
           </div>
           <button className="ghost-button" onClick={onClose} type="button" aria-label="Close holding form">
             <X size={18} />
@@ -108,7 +108,7 @@ export function HoldingForm({
 
           {draft.type === "manualAsset" ? (
             <label>
-              <span>Estimated value in AUD</span>
+              <span>Estimated value</span>
               <input
                 inputMode="decimal"
                 value={draft.assetValueAud}
@@ -151,7 +151,7 @@ export function HoldingForm({
           {draft.type === "crypto" ? (
             <>
               <label>
-                <span>Coin symbol or ID</span>
+                <span>Coin symbol</span>
                 <input
                   value={draft.symbol}
                   onChange={(event) => update({ symbol: event.target.value })}
@@ -159,7 +159,7 @@ export function HoldingForm({
                 />
               </label>
               <label>
-                <span>Amount held</span>
+                <span>Amount you hold</span>
                 <input
                   inputMode="decimal"
                   value={draft.cryptoAmount}
@@ -175,7 +175,7 @@ export function HoldingForm({
             <textarea
               value={draft.notes}
               onChange={(event) => update({ notes: event.target.value })}
-              placeholder="Optional manual notes"
+              placeholder="Optional notes"
               rows={3}
             />
           </label>

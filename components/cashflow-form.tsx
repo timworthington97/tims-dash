@@ -62,7 +62,7 @@ export function CashflowForm({
         <div className="section-head">
           <div>
             <p className="eyebrow">{(draft as IncomeDraft).id ? `Edit ${kind}` : `Add ${kind}`}</p>
-            <h2>{kind === "income" ? "Track income" : "Track expenses"}</h2>
+            <h2>{kind === "income" ? "Add money coming in" : "Add a monthly cost"}</h2>
           </div>
           <button className="ghost-button" onClick={onClose} type="button" aria-label={`Close ${kind} form`}>
             <X size={18} />
@@ -79,7 +79,7 @@ export function CashflowForm({
             />
           </label>
           <label>
-            <span>Amount in AUD</span>
+            <span>Amount</span>
             <input
               inputMode="decimal"
               value={draft.amount}

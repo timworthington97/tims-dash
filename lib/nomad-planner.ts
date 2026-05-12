@@ -95,11 +95,11 @@ export function calculateNomadPlanner(options: NomadPlannerOptions): NomadPlanne
       destinationLabel,
       currencyCode: options.currencyCode,
       audExchangeRate,
-      summaryText: `To live in ${destinationLabel}, you would want about ${options.currencyCode} ${comfortable.toLocaleString("en-AU")} per month, roughly AUD ${money(comfortable * audExchangeRate).toLocaleString("en-AU")} using this scenario rate.`,
+      summaryText: `To live in ${destinationLabel}, you’d want about ${options.currencyCode} ${comfortable.toLocaleString("en-AU")} per month, roughly AUD ${money(comfortable * audExchangeRate).toLocaleString("en-AU")} at this rate.`,
       savingsText:
         savingsTarget > 0
           ? `That includes ${options.currencyCode} ${savingsTarget.toLocaleString("en-AU")} per month set aside as savings.`
-          : "This scenario only covers rent and living costs unless you add a savings target.",
+          : "This scenario covers rent and living costs unless you add a savings goal.",
     },
   };
 }

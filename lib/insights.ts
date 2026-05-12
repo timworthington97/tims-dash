@@ -145,17 +145,17 @@ function describeSinceLastCheck(input: DashboardInsightsInput, checkAt: string |
     const periodText = primary.approximate ? `since your oldest saved snapshot ${formatRelativeTime(primary.snapshot.timestamp)}` : `over the last ${primary.label}`;
 
     if (absolute < 10) {
-      return `Your liquid position is broadly steady ${periodText}.`;
+      return `The money you can use is broadly steady ${periodText}.`;
     }
 
-    return `Your liquid position is ${primary.delta > 0 ? "up" : "down"} ${formatAud(absolute)} ${periodText}${driverText}.`;
+    return `The money you can use is ${primary.delta > 0 ? "up" : "down"} ${formatAud(absolute)} ${periodText}${driverText}.`;
   }
 
   if (checkAt) {
-    return `Last check was ${formatRelativeTime(checkAt)}, but there is not enough usable snapshot history yet to compare movement cleanly.`;
+    return `Last check was ${formatRelativeTime(checkAt)}, but there is not enough refresh history yet to compare changes clearly.`;
   }
 
-  return "Tim’s Dash is ready to brief you. Refresh prices and keep a few snapshots so 24-hour and 7-day movement becomes meaningful.";
+  return "Tim’s Dash is ready to brief you. Refresh prices a few times so 24-hour and 7-day changes become useful.";
 }
 
 function buildComparisons(input: DashboardInsightsInput) {
@@ -175,8 +175,8 @@ function buildComparisons(input: DashboardInsightsInput) {
       tone: compareTone(dayDelta.delta),
       text:
         Math.abs(dayDelta.delta) < 10
-          ? `Liquid money is roughly flat ${period}.`
-          : `Liquid money is ${dayDelta.delta > 0 ? "up" : "down"} ${formatAud(Math.abs(dayDelta.delta))} ${period} (${formatPercent(Math.abs(dayDelta.percent))}).`,
+          ? `Money you can use is roughly flat ${period}.`
+          : `Money you can use is ${dayDelta.delta > 0 ? "up" : "down"} ${formatAud(Math.abs(dayDelta.delta))} ${period} (${formatPercent(Math.abs(dayDelta.percent))}).`,
     });
   }
 
@@ -187,8 +187,8 @@ function buildComparisons(input: DashboardInsightsInput) {
       tone: compareTone(weekDelta.delta),
       text:
         Math.abs(weekDelta.delta) < 10
-          ? `Liquid money is roughly flat ${period}.`
-          : `Liquid money is ${weekDelta.delta > 0 ? "up" : "down"} ${formatAud(Math.abs(weekDelta.delta))} ${period} (${formatPercent(Math.abs(weekDelta.percent))}).`,
+          ? `Money you can use is roughly flat ${period}.`
+          : `Money you can use is ${weekDelta.delta > 0 ? "up" : "down"} ${formatAud(Math.abs(weekDelta.delta))} ${period} (${formatPercent(Math.abs(weekDelta.percent))}).`,
     });
   }
 
@@ -216,8 +216,8 @@ function buildComparisons(input: DashboardInsightsInput) {
       tone: compareTone(delta),
       text:
         Math.abs(delta) < 10
-          ? "Liquid money is close to where it was three months ago."
-          : `Liquid money is ${delta > 0 ? "stronger" : "softer"} than three months ago by ${formatAud(Math.abs(delta))}.`,
+          ? "Money you can use is close to where it was three months ago."
+          : `Money you can use is ${delta > 0 ? "higher" : "lower"} than three months ago by ${formatAud(Math.abs(delta))}.`,
     });
   }
 
@@ -228,8 +228,8 @@ function buildComparisons(input: DashboardInsightsInput) {
       tone: compareTone(avg),
       text:
         Math.abs(avg) < 10
-          ? "Average monthly bank change over three months is broadly flat."
-          : `Average monthly bank change over three months is ${formatSignedAud(avg)}.`,
+          ? "Average monthly bank balance change over three months is broadly flat."
+          : `Average monthly bank balance change over three months is ${formatSignedAud(avg)}.`,
     });
   }
 
@@ -240,8 +240,8 @@ function buildComparisons(input: DashboardInsightsInput) {
       tone: compareTone(delta),
       text:
         Math.abs(delta) < 0.25
-          ? "Runway is about the same as it was a month ago."
-          : `Runway is ${delta > 0 ? "longer" : "shorter"} than a month ago by about ${Math.abs(delta).toFixed(1)} months.`,
+          ? "Your months of cover are about the same as a month ago."
+          : `Your months of cover are ${delta > 0 ? "higher" : "lower"} than a month ago by about ${Math.abs(delta).toFixed(1)} months.`,
     });
   }
 
@@ -256,7 +256,7 @@ function buildChanges(input: DashboardInsightsInput) {
     items.push({
       id: "period-driver",
       tone: compareTone(weekDelta.driver.delta),
-      text: `Largest seven-day driver: ${weekDelta.driver.label} at ${formatSignedAud(weekDelta.driver.delta)}.`,
+      text: `Biggest 7-day mover: ${weekDelta.driver.label} at ${formatSignedAud(weekDelta.driver.delta)}.`,
     });
   }
 
@@ -278,15 +278,15 @@ function buildChanges(input: DashboardInsightsInput) {
     tone: compareTone(input.cashflow.monthlyNet),
     text:
       input.cashflow.monthlyNet >= 0
-        ? `Monthly cashflow is supportive at ${formatSignedAud(input.cashflow.monthlyNet)}.`
-        : `Monthly cashflow is running at ${formatSignedAud(input.cashflow.monthlyNet)}, which leans on cash reserves.`,
+        ? `You are saving about ${formatAud(input.cashflow.monthlyNet)} per month.`
+        : `You are spending about ${formatAud(Math.abs(input.cashflow.monthlyNet))} more than you bring in each month.`,
   });
 
   if (!items.length) {
     items.push({
       id: "quiet",
       tone: "neutral",
-      text: "Nothing major has shifted yet. The next refresh or bank update will make changes easier to attribute.",
+      text: "Nothing major has shifted yet. The next refresh or bank update will make changes easier to explain.",
     });
   }
 
@@ -313,7 +313,7 @@ function buildWatchouts(input: DashboardInsightsInput) {
     items.push({
       id: "negative-cashflow",
       tone: "warning",
-      text: "Monthly cashflow is negative, so runway depends on protecting liquid reserves.",
+      text: "Monthly spending is higher than income, so your cash buffer matters more.",
     });
   }
 
@@ -329,7 +329,7 @@ function buildWatchouts(input: DashboardInsightsInput) {
     items.push({
       id: "bank-history-stale",
       tone: "warning",
-      text: "Bank history does not include this month yet, so cash comparisons may be partial.",
+      text: "Bank history does not include this month yet, so cash comparisons may be incomplete.",
     });
   }
 
@@ -337,7 +337,7 @@ function buildWatchouts(input: DashboardInsightsInput) {
     items.push({
       id: "price-stale",
       tone: "warning",
-      text: `Holdings are currently marked as ${input.priceStatusLabel.toLowerCase()}, so market comparisons may be conservative.`,
+      text: `Prices are currently marked as ${input.priceStatusLabel.toLowerCase()}, so market comparisons may be incomplete.`,
     });
   }
 
@@ -366,15 +366,15 @@ function buildRecommendation(input: DashboardInsightsInput) {
   }
 
   if (input.cashflow.monthlyNet < 0) {
-    return "Review this month’s spending and cash commitments while monthly cashflow is still negative.";
+    return "Review this month’s spending while expenses are higher than income.";
   }
 
   if (input.bankBufferWarning) {
-    return "Check your safety buffer and bank-cash forward view before the projected dip gets closer.";
+    return "Check your safety buffer and bank cash forecast before the projected dip gets closer.";
   }
 
   if (grouped.length < 3) {
-    return "Add a little more bank history so the trend and runway comparisons become more reliable.";
+    return "Add a little more bank history so trend comparisons become more reliable.";
   }
 
   return "A quick weekly refresh is enough for now. Your dashboard already has a solid picture to work from.";
@@ -417,7 +417,7 @@ function buildConfidence(input: DashboardInsightsInput): DashboardInsights["conf
     return {
       level: "high",
       label: "High confidence",
-      reason: "Recent bank and holdings data look current, so the briefing is working from a solid baseline.",
+      reason: "Recent bank and holding data look current, so this briefing has a solid base.",
     };
   }
 

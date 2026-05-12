@@ -37,8 +37,8 @@ export function BankHistoryForm({
       <div className="modal-panel" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
         <div className="section-head">
           <div>
-            <p className="eyebrow">{draft.id ? "Edit bank history" : "Add bank history"}</p>
-            <h2>Track monthly bank balance</h2>
+            <p className="eyebrow">{draft.id ? "Edit bank balance" : "Add bank balance"}</p>
+            <h2>Save a month-end bank balance</h2>
           </div>
           <button className="ghost-button" onClick={onClose} type="button" aria-label="Close bank history form">
             <X size={18} />
@@ -51,7 +51,7 @@ export function BankHistoryForm({
             <input value={draft.accountName} onChange={(event) => update({ accountName: event.target.value })} placeholder="UBank Everyday" />
           </label>
           <label>
-            <span>Account identifier</span>
+            <span>Account ID</span>
             <input value={draft.accountId} onChange={(event) => update({ accountId: event.target.value })} placeholder="Optional account number" />
           </label>
           <label>
@@ -59,7 +59,7 @@ export function BankHistoryForm({
             <input type="month" value={draft.month} onChange={(event) => update({ month: event.target.value })} />
           </label>
           <label>
-            <span>Ending bank balance in AUD</span>
+              <span>Month-end balance</span>
             <input
               inputMode="decimal"
               value={draft.endingBalanceAud}

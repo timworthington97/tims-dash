@@ -100,8 +100,8 @@ const tabs: { id: TabId; label: string; icon: typeof LayoutGrid }[] = [
 ];
 
 const forwardModes: { id: BankProjectionMode; label: string }[] = [
-  { id: "liquid", label: "Liquid View" },
-  { id: "bankCash", label: "Bank Cash View" },
+  { id: "liquid", label: "Usable money" },
+  { id: "bankCash", label: "Bank cash only" },
 ];
 
 const bankRangeOptions: { id: BankTrendRange; label: string }[] = [
@@ -289,7 +289,7 @@ function describeImportSelection(items: UbankImportBatchItem[]) {
   const needsInput = items.filter((item) => item.status === "needs_input").length;
   const duplicates = items.filter((item) => item.status === "duplicate").length;
   const errors = items.filter((item) => item.status === "error").length;
-  return `${selected} file${selected === 1 ? "" : "s"} selected • ${ready} ready • ${needsInput} need balance • ${duplicates} duplicate${duplicates === 1 ? "" : "s"} skipped • ${errors} parse error${errors === 1 ? "" : "s"}`;
+  return `${selected} file${selected === 1 ? "" : "s"} selected • ${ready} ready • ${needsInput} need balance • ${duplicates} already imported • ${errors} could not be read`;
 }
 
 export default function HomePage() {
@@ -542,7 +542,7 @@ export default function HomePage() {
               : "Already imported for the same account, month, and ending balance.";
           } else if (seenFingerprints.has(review.fileFingerprint) || seenBatchSignatures.has(review.statementSignature) || (review.manualBalanceRequired && seenBatchAccountMonths.has(accountMonthKey))) {
             status = "duplicate";
-            duplicateReason = "Duplicate of another statement in this upload batch.";
+            duplicateReason = "This statement is already in the current upload.";
           }
 
           seenFingerprints.add(review.fileFingerprint);
@@ -613,7 +613,7 @@ export default function HomePage() {
     const duplicates = ubankImportItems.filter((item) => item.status === "duplicate").length;
     const errors = ubankImportItems.filter((item) => item.status === "error").length;
     setUbankImportMessage(
-      `${readyItems.length} imported • ${duplicates} duplicate${duplicates === 1 ? "" : "s"} skipped • ${errors} parse error${errors === 1 ? "" : "s"}`,
+      `${readyItems.length} saved • ${duplicates} already imported • ${errors} could not be read`,
     );
     setUbankImportItems([]);
     setUbankImportError(null);
@@ -723,7 +723,7 @@ export default function HomePage() {
   const selectedProjection = forwardMode === "liquid" ? liquidProjection : bankProjection;
   const projectionsPageProjection = projectionMode === "liquid" ? liquidProjection : bankProjection;
   const projectionsPageStartingBalance = projectionMode === "liquid" ? view.totals.liquid : view.totals.cash;
-  const projectionsPageLabel = projectionMode === "liquid" ? "liquid money" : "bank cash";
+  const projectionsPageLabel = projectionMode === "liquid" ? "money you can use" : "bank cash";
   const threeMonthProjection = selectedProjection.series.slice(0, 3);
   const groupedBankHistory = useMemo(() => aggregateBankHistoryByMonth(bankHistory), [bankHistory]);
   const bankTrend = useMemo(() => buildBankTrend(bankHistory, view.totals.cash, bankTrendRange), [bankHistory, view.totals.cash, bankTrendRange]);
@@ -802,6 +802,15 @@ export default function HomePage() {
   }, [allocation]);
 
   const activeTabLabel = tabs.find((tab) => tab.id === activeTab)?.label ?? "Dashboard";
+  const activeTabHelp: Record<TabId, string> = {
+    dashboard: "See the money you can use, live prices, cash trends, and what needs attention.",
+    holdings: "Manage bank cash, ETFs, crypto, debts, and other assets in one place.",
+    cashflow: "Track money coming in and recurring monthly costs.",
+    salary: "Test a salary, tax settings, rent, and what you could save.",
+    nomad: "Estimate what it would take to live overseas in a chosen city.",
+    projections: "Forecast usable money or bank cash over the next 12 months.",
+    history: "Review bank balances, statement imports, and saved refresh history.",
+  };
 
   return (
     <main className="app-shell">
@@ -881,7 +890,7 @@ export default function HomePage() {
             <header className="workspace-topbar surface">
               <div className="workspace-topbar-actions">
                 <button className="secondary-button" onClick={() => loadSampleData(SAMPLE_HOLDINGS)} type="button">
-                  Load sample data
+                  Use sample data
                 </button>
                 <button
                   className={clsx("primary-button", refreshState === "loading" && "is-loading")}
@@ -899,17 +908,15 @@ export default function HomePage() {
               <div>
                 <p className="eyebrow">Overview</p>
                 <h2>{activeTabLabel}</h2>
-                <p className="subtle">
-                  Liquid money, live ETF and crypto pricing, and a clearer forward view of your bank cash in AUD.
-                </p>
+                <p className="subtle">{activeTabHelp[activeTab]}</p>
               </div>
               <div className="workspace-intro-meta">
                 <div className="workspace-intro-pill inset-surface">
-                  <span>Pricing status</span>
+                  <span>Price data</span>
                   <strong>{priceStatusLabel}</strong>
                 </div>
                 <div className="workspace-intro-pill inset-surface">
-                  <span>Refresh result</span>
+                  <span>Last refresh</span>
                   <strong>{refreshSummary ? `${refreshSummary.updated} updated • ${refreshSummary.failed} failed` : "No refresh yet"}</strong>
                 </div>
               </div>
@@ -920,10 +927,10 @@ export default function HomePage() {
                 <div className="section-head compact">
                   <div>
                     <p className="eyebrow">Private Sync</p>
-                    <h2>Sign in for sync across devices</h2>
+                    <h2>Sign in to keep everything synced</h2>
                   </div>
                 </div>
-                <p className="subtle">Use your email and password to keep your dashboard private and synced between devices. You stay signed in until you sign out.</p>
+                <p className="subtle">Use your email and password to keep your data private and available on your devices. You stay signed in until you sign out.</p>
               </section>
             ) : null}
 
@@ -931,11 +938,11 @@ export default function HomePage() {
               <section className="surface section-card">
                 <div className="section-head compact">
                   <div>
-                    <p className="eyebrow">Cloud Setup</p>
+                    <p className="eyebrow">Sync Setup</p>
                     <h2>Bring your existing data with you?</h2>
                   </div>
                 </div>
-                <p className="subtle">We found local data on this device. Import it into your private Supabase account, or start with a clean synced dashboard.</p>
+                <p className="subtle">We found data saved on this device. Bring it into your private cloud sync, or start with an empty synced dashboard.</p>
                 <div className="section-actions">
                   <button className="secondary-button" onClick={() => void startFreshCloud()} type="button">
                     Start fresh
@@ -952,7 +959,7 @@ export default function HomePage() {
             <section className="hero-card surface">
               <div className="hero-copy">
                 <div className="hero-label-row">
-                  <span className="eyebrow">Usable Total</span>
+                  <span className="eyebrow">Money You Can Use</span>
                   <span
                     className={clsx(
                       "status-pill",
@@ -970,10 +977,10 @@ export default function HomePage() {
                     <AnimatedNumber value={view.totals.liquid} format={formatAud} />
                   </div>
                 <p className="hero-support subtle">
-                  Liquid money includes cash, ETFs, and crypto. Manual assets are shown separately and are excluded from forward planning.
+                  Includes bank cash, ETFs, and crypto. Things like cars or other manual assets are shown separately and do not drive forecasts.
                 </p>
                 <div className="hero-meta">
-                  <div className="movement-strip" aria-label="Liquid movement">
+                  <div className="movement-strip" aria-label="Usable money movement">
                     {liquidMovements.map((movement) => (
                       <div key={movement.label} className={clsx("movement-card", movement.available && movement.direction)}>
                         <span>{movement.label}</span>
@@ -987,7 +994,7 @@ export default function HomePage() {
                     ))}
                   </div>
                   <div className="stamp-stack">
-                    <span>Last refreshed</span>
+                    <span>Prices checked</span>
                     <strong>{lastRefreshedAt ? formatTimestamp(lastRefreshedAt) : "Not yet refreshed"}</strong>
                   </div>
                 </div>
@@ -997,9 +1004,9 @@ export default function HomePage() {
                 <MetricCard label="Bank cash" value={formatAud(view.totals.cash)} tone="neutral" />
                 <MetricCard label="ETFs" value={formatAud(view.totals.etf)} tone="neutral" />
                 <MetricCard label="Crypto" value={formatAud(view.totals.crypto)} tone="neutral" />
-                <MetricCard label="Additional asset value" value={formatAud(view.totals.manualAsset)} tone="neutral" />
-                <MetricCard label="Liabilities" value={formatAud(view.totals.debt)} tone="negative" />
-                <MetricCard label="Net worth incl. assets" value={formatAud(view.totals.netWorth)} tone="neutral" />
+                <MetricCard label="Other assets" value={formatAud(view.totals.manualAsset)} tone="neutral" />
+                <MetricCard label="Debts" value={formatAud(view.totals.debt)} tone="negative" />
+                <MetricCard label="Total after assets" value={formatAud(view.totals.netWorth)} tone="neutral" />
               </div>
             </section>
 
@@ -1018,7 +1025,7 @@ export default function HomePage() {
 
               <div className="insights-grid">
                 <article className="insight-section">
-                  <span className="eyebrow">Compared with recent periods</span>
+                  <span className="eyebrow">Recent trend</span>
                   <div className="insight-list">
                     {insights.comparisons.map((item) => (
                       <p key={item.id} className={clsx("insight-line", item.tone && `tone-${item.tone}`)}>
@@ -1029,7 +1036,7 @@ export default function HomePage() {
                 </article>
 
                 <article className="insight-section">
-                  <span className="eyebrow">What changed</span>
+                  <span className="eyebrow">What moved</span>
                   <div className="insight-list">
                     {insights.changes.map((item) => (
                       <p key={item.id} className={clsx("insight-line", item.tone && `tone-${item.tone}`)}>
@@ -1040,7 +1047,7 @@ export default function HomePage() {
                 </article>
 
                 <article className="insight-section">
-                  <span className="eyebrow">Worth watching</span>
+                  <span className="eyebrow">Keep an eye on</span>
                   <div className="insight-list">
                     {insights.watchouts.map((item) => (
                       <p key={item.id} className={clsx("insight-line", item.tone && `tone-${item.tone}`)}>
@@ -1051,7 +1058,7 @@ export default function HomePage() {
                 </article>
 
                 <article className="insight-section insight-action">
-                  <span className="eyebrow">Suggested next action</span>
+                  <span className="eyebrow">Suggested next step</span>
                   <p className="insight-recommendation">{insights.recommendation}</p>
                   <p className="subtle">{insights.confidence.reason}</p>
                 </article>
@@ -1062,7 +1069,7 @@ export default function HomePage() {
               <section className="surface section-card">
                 <div className="section-head compact">
                   <div>
-                    <p className="eyebrow">Forward View</p>
+                    <p className="eyebrow">Next Up</p>
                     <h2>Next 3 months</h2>
                   </div>
                 </div>
@@ -1080,8 +1087,8 @@ export default function HomePage() {
                 </div>
                 <p className="subtle">
                   {forwardMode === "liquid"
-                    ? "Liquid View starts with cash, ETFs, and crypto, then applies income and expenses."
-                    : "Bank Cash View starts with bank cash only, then applies income and expenses. ETFs and crypto are excluded."}
+                    ? "Starts with bank cash, ETFs, and crypto, then applies your income and expenses."
+                    : "Starts with bank cash only, then applies your income and expenses. ETFs and crypto are left out."}
                 </p>
                 <div className="projection-list compact-list">
                   {threeMonthProjection.map((point) => (
@@ -1100,8 +1107,8 @@ export default function HomePage() {
               <section className="surface section-card">
                 <div className="section-head compact">
                   <div>
-                    <p className="eyebrow">Bank Trend</p>
-                    <h2>Bank Balance Trend</h2>
+                    <p className="eyebrow">Bank Cash</p>
+                    <h2>Bank balance over time</h2>
                   </div>
                 </div>
                 <div className="section-actions">
@@ -1119,14 +1126,14 @@ export default function HomePage() {
                   </div>
                 </div>
                 <div className="metric-strip bank-trend-metrics">
-                  <MetricCard label="Current bank balance" value={formatAud(view.totals.cash)} tone="neutral" />
+                  <MetricCard label="Bank cash now" value={formatAud(view.totals.cash)} tone="neutral" />
                   <MetricCard
                     label={`Change over ${rangeLabel(bankTrendRange)}`}
                     value={bankTrend.changeAud === null ? "Not enough history yet" : formatSignedAud(bankTrend.changeAud)}
                     tone={bankTrend.changeAud === null ? "neutral" : bankTrend.changeAud >= 0 ? "positive" : "negative"}
                   />
                   <MetricCard
-                    label="Average monthly bank change"
+                    label="Average monthly change"
                     value={bankTrend.averageMonthlyChangeAud === null ? "Add more history" : formatSignedAud(bankTrend.averageMonthlyChangeAud)}
                     tone={
                       bankTrend.averageMonthlyChangeAud === null ? "neutral" : bankTrend.averageMonthlyChangeAud >= 0 ? "positive" : "negative"
@@ -1139,15 +1146,15 @@ export default function HomePage() {
                   emptyLabel="Add monthly bank balances to see your bank trend."
                 />
                 <p className="subtle">
-                  Bank trend uses bank cash only. It compares your saved monthly bank balances with your current bank cash total in the app.
+                  Uses bank cash only. It compares your saved month-end balances with the bank cash currently in Tim&apos;s Dash.
                 </p>
               </section>
 
               <section className="surface section-card">
                 <div className="section-head compact">
                   <div>
-                    <p className="eyebrow">Refresh Insight</p>
-                    <h2>Market movement</h2>
+                    <p className="eyebrow">Refresh Summary</p>
+                    <h2>What moved since refresh</h2>
                   </div>
                 </div>
                 {refreshInsight ? (
@@ -1169,7 +1176,7 @@ export default function HomePage() {
                     </div>
                     {refreshInsight.movers.length ? (
                       <div className="mover-list">
-                        <span className="subtle">Top movers</span>
+                        <span className="subtle">Biggest movers</span>
                         {refreshInsight.movers.map((mover) => (
                           <div key={mover.name} className="mover-row">
                             <span>{mover.name}</span>
@@ -1183,8 +1190,8 @@ export default function HomePage() {
                   </div>
                 ) : (
                   <div className="empty-panel compact-empty">
-                    <p>No refresh breakdown yet.</p>
-                    <span>After the next successful refresh, this card will explain what moved.</span>
+                    <p>No refresh summary yet.</p>
+                    <span>After the next successful refresh, this will explain what changed.</span>
                   </div>
                 )}
               </section>
@@ -1193,7 +1200,7 @@ export default function HomePage() {
                 <div className="section-head compact">
                   <div>
                     <p className="eyebrow">Snapshots</p>
-                    <h2>Recent liquid trend</h2>
+                    <h2>Recent money trend</h2>
                   </div>
                 </div>
                 <TrendChart snapshots={snapshots.slice(-8)} compact />
@@ -1203,28 +1210,28 @@ export default function HomePage() {
                 <div className="section-head compact">
                   <div>
                     <p className="eyebrow">Status</p>
-                    <h2>Refresh health</h2>
+                    <h2>Refresh status</h2>
                   </div>
                 </div>
                 <div className="status-stack">
                   <div className={clsx("status-row", refreshState === "loading" && "loading")}>
-                    <span>Pricing pipeline</span>
+                    <span>Price refresh</span>
                     <strong>{refreshState === "loading" ? "Refreshing…" : "Idle"}</strong>
                   </div>
                   <div className="status-row">
-                    <span>Refresh result</span>
+                    <span>Last refresh</span>
                     <strong>{refreshSummary ? `${refreshSummary.updated} updated • ${refreshSummary.failed} failed` : "No refresh yet"}</strong>
                   </div>
                   <div className="status-row">
-                    <span>Refresh time</span>
+                    <span>Time taken</span>
                     <strong>{refreshSummary ? `${(refreshSummary.durationMs / 1000).toFixed(1)}s${refreshSummary.timedOut ? " • timed out" : ""}` : "Not run yet"}</strong>
                   </div>
                   <div className="status-row">
-                    <span>Attention needed</span>
+                    <span>Needs attention</span>
                     <strong>{attentionCount ? `${attentionCount} holding${attentionCount > 1 ? "s" : ""}` : "None"}</strong>
                   </div>
                   <div className="status-row">
-                    <span>Monthly cashflow</span>
+                    <span>Monthly savings</span>
                     <strong className={clsx(cashflow.monthlyNet >= 0 ? "positive-text" : "negative-text")}>
                       {formatSignedAud(cashflow.monthlyNet)}
                     </strong>
@@ -1290,13 +1297,13 @@ export default function HomePage() {
                         <p className="eyebrow">Allocation</p>
                         <h3>Portfolio mix</h3>
                       </div>
-                      <span className="subtle">Manual assets are shown separately from liquid money.</span>
+                      <span className="subtle">Manual assets are kept separate from money you can use.</span>
                     </div>
                     <div className="allocation-layout">
                       <div className="allocation-donut-wrap">
                         <div className="allocation-donut" style={{ background: allocationGradient }}>
                           <div className="allocation-donut-center">
-                            <span>Liquid</span>
+                            <span>Usable</span>
                             <strong>{formatAud(view.totals.liquid)}</strong>
                           </div>
                         </div>
@@ -1410,7 +1417,7 @@ export default function HomePage() {
             <section className="surface section-card">
               <div className="section-head">
                 <div>
-                  <p className="eyebrow">Cashflow</p>
+                  <p className="eyebrow">Money In</p>
                   <h2>Income</h2>
                 </div>
                 <button className="primary-button" onClick={() => setIncomeDraft({ ...EMPTY_INCOME_VALUES })} type="button">
@@ -1419,8 +1426,8 @@ export default function HomePage() {
                 </button>
               </div>
               <div className="metric-strip">
-                <MetricCard label="Recurring monthly income" value={formatAud(cashflow.recurringIncome)} tone="positive" />
-                <MetricCard label="One-off income queued" value={formatAud(cashflow.oneOffIncome)} tone="neutral" />
+                <MetricCard label="Monthly income" value={formatAud(cashflow.recurringIncome)} tone="positive" />
+                <MetricCard label="One-off income" value={formatAud(cashflow.oneOffIncome)} tone="neutral" />
               </div>
               {incomes.length ? (
                 <div className="entry-list">
@@ -1439,7 +1446,7 @@ export default function HomePage() {
               ) : (
                 <div className="empty-panel">
                   <p>No income added yet.</p>
-                  <span>Add recurring pay, side income, or one-off inflows.</span>
+                  <span>Add pay, side income, or one-off money coming in.</span>
                 </div>
               )}
             </section>
@@ -1447,7 +1454,7 @@ export default function HomePage() {
             <section className="surface section-card">
               <div className="section-head">
                 <div>
-                  <p className="eyebrow">Cashflow</p>
+                  <p className="eyebrow">Money Out</p>
                   <h2>Expenses</h2>
                 </div>
                 <button className="primary-button" onClick={() => setExpenseDraft({ ...EMPTY_EXPENSE_VALUES })} type="button">
@@ -1457,7 +1464,7 @@ export default function HomePage() {
               </div>
               <div className="metric-strip">
                 <MetricCard label="Monthly expenses" value={formatAud(cashflow.monthlyExpenses)} tone="negative" />
-                <MetricCard label="Monthly net" value={formatSignedAud(cashflow.monthlyNet)} tone={cashflow.monthlyNet >= 0 ? "positive" : "negative"} />
+                <MetricCard label="Monthly savings" value={formatSignedAud(cashflow.monthlyNet)} tone={cashflow.monthlyNet >= 0 ? "positive" : "negative"} />
               </div>
               {expenses.length ? (
                 <div className="entry-list">
@@ -1476,7 +1483,7 @@ export default function HomePage() {
               ) : (
                 <div className="empty-panel">
                   <p>No expenses added yet.</p>
-                  <span>Add your recurring monthly costs to see monthly burn and runway.</span>
+                  <span>Add recurring costs to see what you can save each month.</span>
                 </div>
               )}
             </section>
@@ -1488,7 +1495,7 @@ export default function HomePage() {
             <section className="surface section-card salary-hero-card">
               <div className="section-head">
                 <div>
-                  <p className="eyebrow">Australia Salary Planner</p>
+                  <p className="eyebrow">Australian Salary Planner</p>
                   <h2>What would this salary actually change?</h2>
                 </div>
               </div>
@@ -1501,9 +1508,9 @@ export default function HomePage() {
                 per month.
               </p>
               <div className="metric-strip">
-                <MetricCard label="Net annual take-home" value={formatAud(salaryPlanner.takeHome.annual)} tone="positive" />
-                <MetricCard label="Net monthly" value={formatAud(salaryPlanner.takeHome.monthly)} tone="neutral" />
-                <MetricCard label="Monthly surplus" value={formatSignedAud(salaryPlanner.savingsProjection.monthlySurplus)} tone={salaryPlanner.savingsProjection.monthlySurplus >= 0 ? "positive" : "negative"} />
+                <MetricCard label="Take-home per year" value={formatAud(salaryPlanner.takeHome.annual)} tone="positive" />
+                <MetricCard label="Take-home per month" value={formatAud(salaryPlanner.takeHome.monthly)} tone="neutral" />
+                <MetricCard label="Monthly savings" value={formatSignedAud(salaryPlanner.savingsProjection.monthlySurplus)} tone={salaryPlanner.savingsProjection.monthlySurplus >= 0 ? "positive" : "negative"} />
               </div>
             </section>
 
@@ -1511,7 +1518,7 @@ export default function HomePage() {
               <section className="surface section-card salary-cash-position-card">
                 <div className="section-head compact">
                   <div>
-                    <p className="eyebrow">Scenario outcome</p>
+                    <p className="eyebrow">Scenario Result</p>
                     <h2>Cash position in 12 months</h2>
                   </div>
                 </div>
@@ -1520,7 +1527,7 @@ export default function HomePage() {
                   {formatSignedAud(salaryPlannerTwelveMonthCashChange)} compared with today
                 </p>
                 <p className="subtle">
-                  Starts with your current bank cash of {formatAud(view.totals.cash)}, then applies this planner&apos;s 12-month surplus.
+                  Starts with your current bank cash of {formatAud(view.totals.cash)}, then adds 12 months of estimated savings from this plan.
                 </p>
               </section>
 
@@ -1528,12 +1535,12 @@ export default function HomePage() {
                 <div className="section-head compact">
                   <div>
                     <p className="eyebrow">Inputs</p>
-                    <h2>Scenario controls</h2>
+                    <h2>Plan settings</h2>
                   </div>
                 </div>
                 <div className="form-grid salary-form-grid">
                   <label className="full-span">
-                    <span>Annual gross salary</span>
+                    <span>Salary before tax</span>
                     <input
                       inputMode="decimal"
                       value={salaryPlannerSalary}
@@ -1542,7 +1549,7 @@ export default function HomePage() {
                     />
                   </label>
                   <label>
-                    <span>Hypothetical rent</span>
+                    <span>Rent to test</span>
                     <input
                       inputMode="decimal"
                       value={salaryPlannerRent}
@@ -1566,7 +1573,7 @@ export default function HomePage() {
                     </div>
                   </div>
                   <div className="salary-rent-presets full-span">
-                    <span>CBD 1-bedroom apartment rent preset</span>
+                    <span>City 1-bedroom rent presets</span>
                     <div className="salary-preset-grid">
                       {salaryRentPresets.map((preset) => (
                         <button
@@ -1585,7 +1592,7 @@ export default function HomePage() {
                     </div>
                   </div>
                   <label>
-                    <span>Extra monthly expenses</span>
+                    <span>Extra monthly costs</span>
                     <input
                       inputMode="decimal"
                       value={salaryPlannerExtraExpenses}
@@ -1594,7 +1601,7 @@ export default function HomePage() {
                     />
                   </label>
                   <label>
-                    <span>Target monthly savings</span>
+                    <span>Target savings per month</span>
                     <input
                       inputMode="decimal"
                       value={salaryPlannerTargetSavings}
@@ -1611,7 +1618,7 @@ export default function HomePage() {
                   >
                     <span>
                       <strong>Include Medicare levy</strong>
-                      <small>Uses the 2% levy with the low-income phase-in.</small>
+                      <small>Uses the 2% levy and low-income phase-in.</small>
                     </span>
                     <i>{salaryPlannerMedicare ? "On" : "Off"}</i>
                   </button>
@@ -1622,7 +1629,7 @@ export default function HomePage() {
                   >
                     <span>
                       <strong>Include HELP/HECS</strong>
-                      <small>Uses the 2025-26 marginal study-loan repayment rules.</small>
+                      <small>Uses the 2025-26 study-loan repayment bands.</small>
                     </span>
                     <i>{salaryPlannerHelp ? "On" : "Off"}</i>
                   </button>
@@ -1635,11 +1642,11 @@ export default function HomePage() {
                   ))}
                 </div>
                 <p className="subtle">
-                  Expense benchmark: {formatAud(cashflow.monthlyExpenses)} from Tim&apos;s Dash expenses
+                  Expense baseline: {formatAud(cashflow.monthlyExpenses)} from your saved expenses
                   {salaryPlannerRentAmount > 0
                     ? ` plus ${formatAud(salaryPlannerRentAmount)} rent per month (${formatAud(salaryPlannerRentInputAmount)} ${salaryPlannerRentFrequency})`
                     : ""}
-                  {salaryPlannerExtraExpenseAmount > 0 ? ` plus ${formatAud(salaryPlannerExtraExpenseAmount)} extra` : ""}. Scenario inputs stay local to this planner.
+                  {salaryPlannerExtraExpenseAmount > 0 ? ` plus ${formatAud(salaryPlannerExtraExpenseAmount)} extra` : ""}. These inputs only affect this planner.
                 </p>
               </section>
 
@@ -1647,16 +1654,16 @@ export default function HomePage() {
                 <div className="section-head compact">
                   <div>
                     <p className="eyebrow">Take-home</p>
-                    <h2>Tax and repayment breakdown</h2>
+                    <h2>Tax and repayments</h2>
                   </div>
                 </div>
                 <div className="salary-breakdown-list">
                   <div>
-                    <span>Gross annual salary</span>
+                    <span>Salary before tax</span>
                     <strong>{formatAud(salaryPlanner.taxBreakdown.grossAnnualSalary)}</strong>
                   </div>
                   <div>
-                    <span>Estimated resident income tax</span>
+                    <span>Estimated income tax</span>
                     <strong>{formatAud(salaryPlanner.taxBreakdown.incomeTax)}</strong>
                   </div>
                   <div>
@@ -1668,7 +1675,7 @@ export default function HomePage() {
                     <strong>{formatAud(salaryPlanner.taxBreakdown.helpRepayment)}</strong>
                   </div>
                   <div className="salary-breakdown-total">
-                    <span>Net annual take-home</span>
+                    <span>Take-home pay per year</span>
                     <strong>{formatAud(salaryPlanner.takeHome.annual)}</strong>
                   </div>
                 </div>
@@ -1682,15 +1689,15 @@ export default function HomePage() {
               <section className="surface section-card">
                 <div className="section-head compact">
                   <div>
-                    <p className="eyebrow">Savings after expenses</p>
-                    <h2>Build-up forecast</h2>
+                    <p className="eyebrow">After Expenses</p>
+                    <h2>What you could save</h2>
                   </div>
                 </div>
                 <div className="salary-savings-grid">
-                  <MetricCard label="Saved expenses baseline" value={formatAud(cashflow.monthlyExpenses)} tone="neutral" />
-                  <MetricCard label="Hypothetical rent" value={formatAud(salaryPlannerRentAmount)} tone={salaryPlannerRentAmount > 0 ? "warning" : "neutral"} />
-                  <MetricCard label="Total scenario expenses" value={formatAud(salaryPlanner.savingsProjection.monthlyExpenses)} tone="neutral" />
-                  <MetricCard label="Monthly surplus" value={formatSignedAud(salaryPlanner.savingsProjection.monthlySurplus)} tone={salaryPlanner.savingsProjection.monthlySurplus >= 0 ? "positive" : "negative"} />
+                  <MetricCard label="Saved expenses" value={formatAud(cashflow.monthlyExpenses)} tone="neutral" />
+                  <MetricCard label="Rent to test" value={formatAud(salaryPlannerRentAmount)} tone={salaryPlannerRentAmount > 0 ? "warning" : "neutral"} />
+                  <MetricCard label="Total monthly costs" value={formatAud(salaryPlanner.savingsProjection.monthlyExpenses)} tone="neutral" />
+                  <MetricCard label="Monthly savings" value={formatSignedAud(salaryPlanner.savingsProjection.monthlySurplus)} tone={salaryPlanner.savingsProjection.monthlySurplus >= 0 ? "positive" : "negative"} />
                   <MetricCard label="3 months" value={formatSignedAud(salaryPlanner.savingsProjection.threeMonths)} tone={salaryPlanner.savingsProjection.threeMonths >= 0 ? "positive" : "negative"} />
                   <MetricCard label="6 months" value={formatSignedAud(salaryPlanner.savingsProjection.sixMonths)} tone={salaryPlanner.savingsProjection.sixMonths >= 0 ? "positive" : "negative"} />
                   <MetricCard label="12 months" value={formatSignedAud(salaryPlanner.savingsProjection.twelveMonths)} tone={salaryPlanner.savingsProjection.twelveMonths >= 0 ? "positive" : "negative"} />
@@ -1705,8 +1712,8 @@ export default function HomePage() {
               <section className="surface section-card">
                 <div className="section-head compact">
                   <div>
-                    <p className="eyebrow">Target helper</p>
-                    <h2>Salary needed</h2>
+                    <p className="eyebrow">Savings Goal</p>
+                    <h2>Salary you’d need</h2>
                   </div>
                 </div>
                 {salaryPlanner.targetSalaryEstimate ? (
@@ -1720,22 +1727,22 @@ export default function HomePage() {
                   </div>
                 ) : (
                   <div className="empty-panel compact-empty">
-                    <p>Add a target monthly saving amount.</p>
-                    <span>Tim&apos;s Dash will estimate the gross salary needed under the same tax assumptions.</span>
+                    <p>Add a monthly savings goal.</p>
+                    <span>Tim&apos;s Dash will estimate the salary before tax needed under the same settings.</span>
                   </div>
                 )}
                 <div className="status-stack salary-comparison-stack">
                   <div className="status-row">
-                    <span>Income used in this scenario</span>
+                    <span>Income used here</span>
                     <strong>Salary only</strong>
                   </div>
                   <div className="status-row">
-                    <span>Saved Tim&apos;s Dash income</span>
+                    <span>Your saved income</span>
                     <strong>Excluded</strong>
                   </div>
                 </div>
                 <p className="subtle">
-                  The planner uses your hypothetical salary as the income source. Saved recurring income from Income &amp; Expenses is not added on top.
+                  This planner uses the salary above as the only income source. Saved income from Income &amp; Expenses is not added on top.
                 </p>
               </section>
             </section>
@@ -1743,8 +1750,8 @@ export default function HomePage() {
             <section className="surface section-card">
               <div className="section-head compact">
                 <div>
-                  <p className="eyebrow">Quick comparison</p>
-                  <h2>Salary presets after expenses</h2>
+                  <p className="eyebrow">Quick Compare</p>
+                  <h2>Salary presets after costs</h2>
                 </div>
               </div>
               <div className="salary-scenario-grid">
@@ -1753,7 +1760,7 @@ export default function HomePage() {
                     <span>{formatAud(scenario.taxBreakdown.grossAnnualSalary)} gross</span>
                     <strong>{formatAud(scenario.takeHome.monthly)} / month</strong>
                     <small className={clsx(scenario.savingsProjection.monthlySurplus >= 0 ? "positive-text" : "negative-text")}>
-                      {formatSignedAud(scenario.savingsProjection.monthlySurplus)} after expenses
+                      {formatSignedAud(scenario.savingsProjection.monthlySurplus)} saved monthly
                     </small>
                   </article>
                 ))}
@@ -1768,14 +1775,14 @@ export default function HomePage() {
             <section className="surface section-card">
               <div className="section-head compact">
                 <div>
-                  <p className="eyebrow">Rent comparison</p>
+                  <p className="eyebrow">Rent Compare</p>
                   <h2>City rent impact</h2>
                 </div>
               </div>
               {cityRentComparisons.strongest && cityRentComparisons.mostExpensive ? (
                 <div className="city-rent-summary inset-surface">
                   <p>
-                    <strong>{cityRentComparisons.strongest.city}</strong> would leave you with the strongest monthly surplus in this scenario.
+                    <strong>{cityRentComparisons.strongest.city}</strong> would leave you with the most monthly savings in this scenario.
                   </p>
                   <p>
                     Compared with {cityRentComparisons.mostExpensive.city}, it leaves about{" "}
@@ -1805,8 +1812,8 @@ export default function HomePage() {
                 <div className="city-rent-table-head">
                   <span>City</span>
                   <span>Rent</span>
-                  <span>Monthly surplus</span>
-                  <span>Yearly surplus</span>
+                  <span>Monthly savings</span>
+                  <span>Yearly savings</span>
                   <span>12-month cash</span>
                 </div>
                 {cityRentComparisons.items.map((item) => {
@@ -1834,7 +1841,7 @@ export default function HomePage() {
                 })}
               </div>
               <p className="subtle salary-assumption-note">
-                City rent comparison is scenario-only. It uses the same salary, Medicare, HELP/HECS, saved expense baseline, and extra expense inputs, then swaps only the city rent preset.
+                City rent comparison is only for this planner. It keeps the same salary, Medicare, HELP/HECS, saved expenses, and extra costs, then swaps the rent preset.
               </p>
             </section>
           </section>
@@ -1854,17 +1861,17 @@ export default function HomePage() {
               </p>
               <div className="metric-strip">
                 <MetricCard
-                  label="Break-even income"
+                  label="Minimum monthly income"
                   value={formatScenarioMoney(nomadPlanner.incomeTargets.breakEvenMonthly, nomadPlanner.scenarioSummary.currencyCode)}
                   tone="neutral"
                 />
                 <MetricCard
-                  label="Comfortable target in AUD"
+                  label="Comfortable target"
                   value={formatAudEquivalent(nomadPlanner.incomeTargets.comfortableMonthlyAud)}
                   tone="positive"
                 />
                 <MetricCard
-                  label="Safer target in AUD"
+                  label="Safer target"
                   value={formatAudEquivalent(nomadPlanner.incomeTargets.saferMonthlyAud)}
                   tone="warning"
                 />
@@ -1876,24 +1883,24 @@ export default function HomePage() {
                 <div className="section-head compact">
                   <div>
                     <p className="eyebrow">Destination</p>
-                    <h2>Scenario setup</h2>
+                    <h2>Where you’re testing</h2>
                   </div>
                 </div>
                 <div className="form-grid salary-form-grid">
                   <label>
-                    <span>Target country</span>
+                    <span>Country</span>
                     <input value={nomadCountry} onChange={(event) => setNomadCountry(event.target.value)} placeholder="Japan" />
                   </label>
                   <label>
-                    <span>Target city</span>
+                    <span>City</span>
                     <input value={nomadCity} onChange={(event) => setNomadCity(event.target.value)} placeholder="Tokyo" />
                   </label>
                   <label>
-                    <span>Scenario currency</span>
+                    <span>Local currency</span>
                     <input value={nomadCurrency} onChange={(event) => setNomadCurrency(event.target.value.toUpperCase())} placeholder="AUD" />
                   </label>
                   <label>
-                    <span>Live AUD conversion</span>
+                    <span>AUD exchange rate</span>
                     <input
                       inputMode="decimal"
                       readOnly
@@ -1906,9 +1913,9 @@ export default function HomePage() {
                   <strong>
                     {nomadFxStatus === "loading" ? <LoaderCircle aria-hidden="true" className="nomad-fx-spinner" size={15} /> : null}
                     {nomadFxStatus === "loading"
-                      ? "Fetching today's AUD rate"
+                      ? "Getting today’s AUD rate"
                       : nomadFxStatus === "live"
-                        ? "Using live daily AUD rate"
+                        ? "Using today’s AUD rate"
                         : "Using fallback AUD rate"}
                   </strong>
                   <span>
@@ -1949,16 +1956,16 @@ export default function HomePage() {
                   </div>
                 </div>
                 <p className="subtle">
-                  Nomad Planner values stay in this scenario only. Rent preset: {nomadRentSource}. You can still edit the rent field manually.
-                  Currency conversion uses live daily data where available, with the preset rate only as a fallback.
+                  Nomad Planner values only affect this page. Rent preset: {nomadRentSource}. You can still edit the rent manually.
+                  Currency conversion uses today’s live rate when available, with the preset rate only as a fallback.
                 </p>
               </section>
 
               <section className="surface section-card">
                 <div className="section-head compact">
                   <div>
-                    <p className="eyebrow">Monthly costs</p>
-                    <h2>Cost assumptions</h2>
+                    <p className="eyebrow">Monthly Costs</p>
+                    <h2>Living costs to test</h2>
                   </div>
                 </div>
                 <div className="form-grid salary-form-grid">
@@ -1967,7 +1974,7 @@ export default function HomePage() {
                     <input inputMode="decimal" value={nomadRent} onChange={(event) => setNomadRent(event.target.value)} placeholder="180000" />
                   </label>
                   <label>
-                    <span>Other monthly living expenses</span>
+                    <span>Other monthly living costs</span>
                     <input
                       inputMode="decimal"
                       value={nomadLivingExpenses}
@@ -1976,7 +1983,7 @@ export default function HomePage() {
                     />
                   </label>
                   <label>
-                    <span>Desired monthly savings target</span>
+                    <span>Savings goal per month</span>
                     <input
                       inputMode="decimal"
                       value={nomadSavingsTarget}
@@ -1985,14 +1992,14 @@ export default function HomePage() {
                     />
                   </label>
                   <label>
-                    <span>Extra monthly buffer</span>
+                    <span>Extra buffer per month</span>
                     <input inputMode="decimal" value={nomadBuffer} onChange={(event) => setNomadBuffer(event.target.value)} placeholder="60000" />
                   </label>
                 </div>
                 <div className="salary-savings-grid nomad-cost-grid">
                   <MetricCard label="Rent" value={formatScenarioMoney(nomadPlanner.monthlyCosts.rent, nomadPlanner.scenarioSummary.currencyCode)} tone="neutral" />
                   <MetricCard
-                    label="Living expenses"
+                    label="Living costs"
                     value={formatScenarioMoney(nomadPlanner.monthlyCosts.livingExpenses, nomadPlanner.scenarioSummary.currencyCode)}
                     tone="neutral"
                   />
@@ -2008,13 +2015,13 @@ export default function HomePage() {
               <section className="surface section-card nomad-income-card">
                 <div className="section-head compact">
                   <div>
-                    <p className="eyebrow">Required income</p>
+                    <p className="eyebrow">Income Needed</p>
                     <h2>Monthly and yearly targets</h2>
                   </div>
                 </div>
                 <div className="nomad-target-grid">
                   <article className="target-salary-card inset-surface">
-                    <span>Bare minimum to break even</span>
+                    <span>Minimum to cover costs</span>
                     <strong>{formatScenarioMoney(nomadPlanner.incomeTargets.breakEvenMonthly, nomadPlanner.scenarioSummary.currencyCode)}</strong>
                     <p className="subtle">
                       {formatAudEquivalent(nomadPlanner.incomeTargets.breakEvenMonthlyAud)} per month •{" "}
@@ -2022,7 +2029,7 @@ export default function HomePage() {
                     </p>
                   </article>
                   <article className="target-salary-card inset-surface">
-                    <span>Comfortable target income</span>
+                    <span>Comfortable income target</span>
                     <strong>{formatScenarioMoney(nomadPlanner.incomeTargets.comfortableMonthly, nomadPlanner.scenarioSummary.currencyCode)}</strong>
                     <p className="subtle">
                       {formatAudEquivalent(nomadPlanner.incomeTargets.comfortableMonthlyAud)} per month •{" "}
@@ -2030,7 +2037,7 @@ export default function HomePage() {
                     </p>
                   </article>
                   <article className="target-salary-card inset-surface">
-                    <span>Stretch / safer target</span>
+                    <span>Safer income target</span>
                     <strong>{formatScenarioMoney(nomadPlanner.incomeTargets.saferMonthly, nomadPlanner.scenarioSummary.currencyCode)}</strong>
                     <p className="subtle">
                       {formatAudEquivalent(nomadPlanner.incomeTargets.saferMonthlyAud)} per month •{" "}
@@ -2039,8 +2046,8 @@ export default function HomePage() {
                   </article>
                 </div>
                 <div className="runway-banner">
-                  Total monthly target: {formatScenarioMoney(nomadPlanner.monthlyCosts.safer, nomadPlanner.scenarioSummary.currencyCode)} with rent,
-                  living costs, savings, and buffer included. That is roughly {formatAudEquivalent(nomadPlanner.incomeTargets.saferMonthlyAud)}.
+                  To include rent, living costs, savings, and buffer, you’d want {formatScenarioMoney(nomadPlanner.monthlyCosts.safer, nomadPlanner.scenarioSummary.currencyCode)} per month.
+                  That is roughly {formatAudEquivalent(nomadPlanner.incomeTargets.saferMonthlyAud)}.
                 </div>
               </section>
             </section>
@@ -2052,11 +2059,11 @@ export default function HomePage() {
             <section className="surface section-card projection-card">
               <div className="section-head">
                 <div>
-                  <p className="eyebrow">Projection</p>
-                  <h2>12-month {projectionMode === "liquid" ? "liquid" : "bank cash"} forecast</h2>
+                  <p className="eyebrow">Forecast</p>
+                  <h2>12-month {projectionMode === "liquid" ? "usable money" : "bank cash"} forecast</h2>
                 </div>
                 <div className="section-actions">
-                  <div className="segmented-control compact-toggle" aria-label="Projection basis">
+                  <div className="segmented-control compact-toggle" aria-label="Forecast type">
                     {forwardModes.map((mode) => (
                       <button
                         key={mode.id}
@@ -2064,7 +2071,7 @@ export default function HomePage() {
                         onClick={() => setProjectionMode(mode.id)}
                         type="button"
                       >
-                        {mode.id === "liquid" ? "Liquid total" : "Bank cash only"}
+                        {mode.id === "liquid" ? "Usable money" : "Bank cash only"}
                       </button>
                     ))}
                   </div>
@@ -2072,30 +2079,30 @@ export default function HomePage() {
               </div>
               <div className="metric-strip projection-metrics">
                 <MetricCard
-                  label={projectionMode === "liquid" ? "Starting liquid total" : "Starting bank cash"}
+                  label={projectionMode === "liquid" ? "Starting usable money" : "Starting bank cash"}
                   value={formatAud(projectionsPageStartingBalance)}
                   tone="neutral"
                 />
                 <MetricCard
-                  label="Monthly net"
+                  label="Monthly savings"
                   value={formatSignedAud(projectionsPageProjection.monthlyNet)}
                   tone={projectionsPageProjection.monthlyNet >= 0 ? "positive" : "negative"}
                 />
                 <MetricCard
-                  label="Runway"
+                  label="Months covered"
                   value={formatMonths(projectionsPageProjection.runwayMonths)}
                   tone={projectionsPageProjection.runwayMonths === null ? "positive" : "warning"}
                 />
               </div>
               <p className="subtle">
                 {projectionMode === "liquid"
-                  ? "Assumption: this view starts with total liquid money: bank cash, ETFs, and crypto. Manual assets are excluded unless you actually sell them outside the app."
-                  : "Assumption: this view starts with bank cash only, then applies your saved monthly income and expenses. ETFs, crypto, manual assets, and debts are excluded from the starting balance."}
+                  ? "Starts with bank cash, ETFs, and crypto. Manual assets are left out unless you actually sell them outside the app."
+                  : "Starts with bank cash only, then applies your saved monthly income and expenses. ETFs, crypto, manual assets, and debts are left out."}
               </p>
               <div className="runway-banner">
                 {projectionsPageProjection.monthlyNet >= 0
-                  ? `Monthly cashflow is positive, so ${projectionsPageLabel} is expected to grow over the next 12 months.`
-                  : `Monthly burn is ${formatAud(Math.abs(projectionsPageProjection.monthlyNet))}. At this pace, ${projectionsPageLabel} runway is about ${formatMonths(projectionsPageProjection.runwayMonths)}.`}
+                  ? `You are saving each month, so ${projectionsPageLabel} is expected to grow over the next 12 months.`
+                  : `You are spending ${formatAud(Math.abs(projectionsPageProjection.monthlyNet))} more than you bring in each month. At this pace, ${projectionsPageLabel} lasts about ${formatMonths(projectionsPageProjection.runwayMonths)}.`}
               </div>
               {projectionMode === "bankCash" && bankBufferWarning ? <div className="runway-banner warning-banner">{bankBufferWarning}</div> : null}
               <ProjectionChart points={projectionsPageProjection.series} startingBalance={projectionsPageStartingBalance} />
@@ -2137,20 +2144,20 @@ export default function HomePage() {
                   </div>
                   <button className="primary-button" onClick={() => setBankHistoryDraft({ ...EMPTY_BANK_HISTORY_VALUES })} type="button">
                     <Plus size={18} />
-                    Add bank history
+                    Add bank balance
                   </button>
                 </div>
               </div>
 
               <div className="metric-strip">
-                <MetricCard label="Current bank balance" value={formatAud(view.totals.cash)} tone="neutral" />
+                <MetricCard label="Bank cash now" value={formatAud(view.totals.cash)} tone="neutral" />
                 <MetricCard
                   label={`Change over ${rangeLabel(bankTrendRange)}`}
                   value={bankTrend.changeAud === null ? "Not enough history yet" : formatSignedAud(bankTrend.changeAud)}
                   tone={bankTrend.changeAud === null ? "neutral" : bankTrend.changeAud >= 0 ? "positive" : "negative"}
                 />
                 <MetricCard
-                  label="Average monthly bank change"
+                  label="Average monthly change"
                   value={bankTrend.averageMonthlyChangeAud === null ? "Add more history" : formatSignedAud(bankTrend.averageMonthlyChangeAud)}
                   tone={bankTrend.averageMonthlyChangeAud === null ? "neutral" : bankTrend.averageMonthlyChangeAud >= 0 ? "positive" : "negative"}
                 />
@@ -2165,11 +2172,11 @@ export default function HomePage() {
               <div className="import-card inset-surface">
                 <div className="section-head compact">
                   <div>
-                    <p className="eyebrow">Ubank Statement Import</p>
-                    <h3>Import Ubank CSV</h3>
+                    <p className="eyebrow">Ubank Import</p>
+                    <h3>Import bank statements</h3>
                   </div>
                 </div>
-                <p className="subtle">Upload one or more Ubank CSV or PDF statements, review them together, then import only the valid non-duplicate month-end balances for each account.</p>
+                <p className="subtle">Upload Ubank CSV or PDF statements, review what Tim&apos;s Dash found, then save the valid month-end balances for each account.</p>
                 <div
                   className={clsx("import-dropzone", ubankDragActive && "active")}
                   onDragOver={(event) => {
@@ -2190,9 +2197,9 @@ export default function HomePage() {
                 >
                   <div className="import-actions">
                     <label className="secondary-button file-trigger" htmlFor="ubank-csv-input">
-                      Select CSV files
+                      Select statements
                     </label>
-                    <span className="subtle">or drag and drop multiple CSV or PDF statements here</span>
+                    <span className="subtle">or drag and drop CSV or PDF statements here</span>
                   </div>
                 </div>
                 <div className="import-actions">
@@ -2220,7 +2227,7 @@ export default function HomePage() {
                             <strong>{item.fileName}</strong>
                             <span>
                               {item.review
-                                ? `${item.review.statementLabel} • ${item.review.endingBalanceAud === null ? "Ending balance needed" : formatAud(item.review.endingBalanceAud)} • ${item.review.transactionCount} transactions`
+                                ? `${item.review.statementLabel} • ${item.review.endingBalanceAud === null ? "Add ending balance" : formatAud(item.review.endingBalanceAud)} • ${item.review.transactionCount} transactions`
                                 : item.error ?? "Could not read this file."}
                             </span>
                             {item.review?.accountName ? (
@@ -2259,8 +2266,8 @@ export default function HomePage() {
                               : item.status === "needs_input"
                                 ? "Needs ending balance"
                                 : item.status === "duplicate"
-                                  ? "Duplicate skipped"
-                                  : "Parse error"}
+                                  ? "Already imported"
+                                  : "Could not read"}
                           </span>
                         </article>
                       ))}
@@ -2278,7 +2285,7 @@ export default function HomePage() {
                         Cancel
                       </button>
                       <button className="primary-button" onClick={saveImportedBankHistory} type="button">
-                        Import valid statements
+                        Save balances
                       </button>
                     </div>
                   </div>
@@ -2316,7 +2323,7 @@ export default function HomePage() {
               ) : (
                 <div className="empty-panel">
                   <p>No bank history added yet.</p>
-                  <span>Add old month-end bank balances from your statements to build a cleaner bank trend.</span>
+                  <span>Add past month-end balances from your statements to build a clearer bank trend.</span>
                 </div>
               )}
             </section>
@@ -2325,7 +2332,7 @@ export default function HomePage() {
               <div className="section-head compact">
                 <div>
                   <p className="eyebrow">History</p>
-                  <h2>Liquid snapshot history</h2>
+                  <h2>Refresh history</h2>
                 </div>
                 <div className="section-actions">
                   {snapshots.length ? (
@@ -2347,7 +2354,7 @@ export default function HomePage() {
               {snapshots.length === 0 ? (
                 <div className="empty-panel">
                   <p>No refresh history yet.</p>
-                  <span>Your liquid-money snapshot trail will appear here after refreshes.</span>
+                  <span>Your saved balance snapshots will appear here after refreshes.</span>
                 </div>
               ) : (
                 <>

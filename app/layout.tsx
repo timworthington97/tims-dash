@@ -18,7 +18,7 @@ const themeInitScript = `
 
 export const metadata: Metadata = {
   title: "Tim's Dash",
-  description: "A polished AUD personal finance dashboard for tracking liquid money, bank cash trends, holdings, and refresh snapshots.",
+  description: "A private finance dashboard for tracking bank cash, holdings, spending, forecasts, and saved balance history.",
 };
 
 export default function RootLayout({

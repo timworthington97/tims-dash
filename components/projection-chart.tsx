@@ -23,13 +23,13 @@ export function ProjectionChart({
     <div className="projection-chart-card inset-surface">
       <div className="projection-chart-head">
         <div>
-          <p className="eyebrow">Forecast View</p>
-          <h3>12-month path</h3>
+          <p className="eyebrow">Forecast</p>
+          <h3>Next 12 months</h3>
         </div>
-        <span className="subtle">Month-end balances</span>
+        <span className="subtle">End-of-month balances</span>
       </div>
 
-      <div className="projection-chart-bars" aria-label="Projected month-end balances for the next 12 months">
+      <div className="projection-chart-bars" aria-label="Forecast end-of-month balances for the next 12 months">
         {points.map((point, index) => {
           const previousBalance = index === 0 ? startingBalance : points[index - 1]?.balance ?? startingBalance;
           const height = 18 + ((point.balance - min) / range) * 86;
@@ -50,7 +50,7 @@ export function ProjectionChart({
       <div className="projection-chart-caption">
         <span>Now {formatAud(startingBalance)}</span>
         <strong>{formatAud(finalBalance)}</strong>
-        <span>{formatSignedAud(finalBalance - startingBalance)} over 12 months</span>
+        <span>{formatSignedAud(finalBalance - startingBalance)} in 12 months</span>
       </div>
     </div>
   );

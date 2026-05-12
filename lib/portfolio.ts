@@ -498,7 +498,7 @@ export function buildRefreshInsight(
     notes.push({
       id: "partial-attribution",
       tone: "warning",
-      text: "Movement attribution excludes stale or failed provider updates. Check Refresh health for provider details.",
+      text: "This summary ignores stale or failed price updates. Check Refresh status for provider details.",
     });
   }
 
